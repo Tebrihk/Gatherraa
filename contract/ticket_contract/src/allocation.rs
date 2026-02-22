@@ -1,6 +1,5 @@
 /// Allocation Strategies for Ticket Distribution
 /// Supports multiple strategies: FCFS, Lottery, Whitelist with fair mechanisms
-
 use soroban_sdk::{contracttype, Address, Bytes, Env, Symbol, Vec};
 
 /// Allocation strategy types
@@ -80,7 +79,11 @@ pub struct AllocationEngine;
 
 impl AllocationEngine {
     /// Allocate tickets using FCFS strategy
-    pub fn allocate_fcfs(e: &Env, entries: &Vec<LotteryEntry>, quantity: u32) -> Vec<AllocationResult> {
+    pub fn allocate_fcfs(
+        e: &Env,
+        entries: &Vec<LotteryEntry>,
+        quantity: u32,
+    ) -> Vec<AllocationResult> {
         let mut results = Vec::new(e);
 
         for i in 0..quantity.min(entries.len() as u32) {
@@ -211,7 +214,8 @@ impl AllocationEngine {
 
         // Phase 2: Lottery for remaining quantity
         let remaining = quantity - whitelist_allocated;
-        let lottery_results = Self::allocate_lottery(e, lottery_entries, randomness_values, remaining);
+        let lottery_results =
+            Self::allocate_lottery(e, lottery_entries, randomness_values, remaining);
 
         for result in lottery_results {
             results

@@ -9,6 +9,8 @@ pub enum DataKey {
     RewardPerTokenStored,
     LastUpdateTime,
     TotalShares,
+    UpgradeTimelock,
+    Version,
 }
 
 #[contracttype]

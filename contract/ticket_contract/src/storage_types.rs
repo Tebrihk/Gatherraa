@@ -20,6 +20,8 @@ pub enum DataKey {
     CommitmentHash(Address),
     LotteryResults(Symbol),
     AntiSnipingConfig(Symbol),
+    UpgradeTimelock,
+    Version,
 }
 
 #[contracttype]

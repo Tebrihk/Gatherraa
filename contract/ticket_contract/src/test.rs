@@ -2,7 +2,11 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env, String, Symbol};
+use soroban_sdk::{
+    contract, contractimpl,
+    testutils::{Address as _, Events, Ledger},
+    Address, BytesN, Env, String, Symbol,
+};
 
 // ---------------------------------------------------------------------------
 // Mock Oracle Contract
@@ -403,7 +407,8 @@ fn test_commitment_creation() {
     let seed = e.crypto().sha256(&soroban_sdk::Bytes::new(&e));
     let nonce = 42u32;
 
-    let (hash, commitment) = commitment::CommitmentScheme::commit(&e, seed.clone(), nonce, committer.clone());
+    let (hash, commitment) =
+        commitment::CommitmentScheme::commit(&e, seed.clone(), nonce, committer.clone());
 
     assert_eq!(hash.len(), 32);
     assert!(!commitment.revealed);
@@ -418,7 +423,8 @@ fn test_commitment_reveal_verification() {
     let seed = e.crypto().sha256(&soroban_sdk::Bytes::new(&e));
     let nonce = 42u32;
 
-    let (hash, _commitment) = commitment::CommitmentScheme::commit(&e, seed.clone(), nonce, committer);
+    let (hash, _commitment) =
+        commitment::CommitmentScheme::commit(&e, seed.clone(), nonce, committer);
 
     let reveal = commitment::Reveal {
         seed: seed.clone(),
@@ -545,7 +551,8 @@ fn test_anti_sniping_check() {
     }
 
     // Should fail: already at max entries
-    let result = allocation::AllocationEngine::check_anti_sniping(&e, &participant, &config, &recent);
+    let result =
+        allocation::AllocationEngine::check_anti_sniping(&e, &participant, &config, &recent);
     assert!(!result);
 }
 
@@ -618,7 +625,8 @@ fn test_commit_reveal_lottery_cycle() {
 
     // Phase 1: Commit
     let seed = e.crypto().sha256(&soroban_sdk::Bytes::new(&e));
-    let (commitment_hash, _) = commitment::CommitmentScheme::commit(&e, seed.clone(), 42, committer.clone());
+    let (commitment_hash, _) =
+        commitment::CommitmentScheme::commit(&e, seed.clone(), 42, committer.clone());
 
     // Phase 2: Reveal
     let reveal = commitment::Reveal {
@@ -636,7 +644,41 @@ fn test_commit_reveal_lottery_cycle() {
     assert_eq!(vrf_output.len(), 32);
 
     // Phase 5: Verify proof
-    let proof_valid =
-        vrf::VRFEngine::verify_vrf_proof(&e, &proof, seed, proof.ledger_sequence);
+    let proof_valid = vrf::VRFEngine::verify_vrf_proof(&e, &proof, seed, proof.ledger_sequence);
     assert!(proof_valid);
+}
+
+#[test]
+fn test_upgrade_flow() {
+    let e = Env::default();
+    e.mock_all_auths();
+    let admin = Address::generate(&e);
+    let client = create_contract(&e, &admin);
+
+    // Initial version should be 1
+    assert_eq!(client.version(), 1);
+
+    let new_wasm_hash = BytesN::from_array(&e, &[1; 32]);
+    let current_timestamp = e.ledger().timestamp();
+    let unlock_time = current_timestamp + 86400; // 24 hours later
+
+    // Schedule upgrade
+    client.schedule_upgrade(&new_wasm_hash, &unlock_time);
+
+    // Cancel upgrade (rollback)
+    client.cancel_upgrade();
+    // Reschedule
+    client.schedule_upgrade(&new_wasm_hash, &unlock_time);
+
+    // Advance time past unlock_time
+    let mut ledger = e.ledger().get();
+    ledger.timestamp = unlock_time + 1;
+    e.ledger().set(ledger);
+
+    // Migrate state
+    client.migrate_state(&2);
+    assert_eq!(client.version(), 2);
+
+    // Execute upgrade
+    // client.execute_upgrade(&new_wasm_hash);
 }

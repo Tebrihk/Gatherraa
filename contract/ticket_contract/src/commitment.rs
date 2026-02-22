@@ -1,7 +1,6 @@
 /// Commitment Scheme Implementation
 /// Implements commit-reveal pattern for additional fairness verification
 /// Ensures that lottery random numbers cannot be manipulated after participation
-
 use soroban_sdk::{contracttype, Address, Bytes, Env, Vec};
 
 /// Hash commitment for commit-reveal scheme
@@ -57,11 +56,7 @@ impl CommitmentScheme {
     }
 
     /// Verify a reveal matches the commitment
-    pub fn verify_reveal(
-        e: &Env,
-        commitment_hash: &Bytes,
-        reveal: &Reveal,
-    ) -> bool {
+    pub fn verify_reveal(e: &Env, commitment_hash: &Bytes, reveal: &Reveal) -> bool {
         // Reconstruct the commitment hash from reveal data
         let mut combined = Vec::new(e);
         combined
@@ -81,16 +76,16 @@ impl CommitmentScheme {
     }
 
     /// Check if reveal is within acceptable time window (prevents premature reveals)
-    pub fn is_reveal_timely(reveal: &Reveal, minimum_reveal_time: u64, maximum_reveal_time: u64) -> bool {
+    pub fn is_reveal_timely(
+        reveal: &Reveal,
+        minimum_reveal_time: u64,
+        maximum_reveal_time: u64,
+    ) -> bool {
         reveal.revealed_at >= minimum_reveal_time && reveal.revealed_at <= maximum_reveal_time
     }
 
     /// Batch verify multiple reveals
-    pub fn batch_verify_reveals(
-        e: &Env,
-        commitments: &Vec<Bytes>,
-        reveals: &Vec<Reveal>,
-    ) -> bool {
+    pub fn batch_verify_reveals(e: &Env, commitments: &Vec<Bytes>, reveals: &Vec<Reveal>) -> bool {
         if commitments.len() != reveals.len() {
             return false;
         }
@@ -141,7 +136,7 @@ impl CommitmentScheme {
 
         let mut committer_bytes = Vec::new(e);
         committer_bytes.push_back(0b0u8).unwrap(); // Placeholder for commitment chain depth
-        
+
         soroban_sdk::crypto::sha256(&combined)
     }
 }
@@ -155,9 +150,10 @@ mod tests {
         let e = Env::new();
         let committer = Address::random(&e);
         let seed = e.crypto().sha256(&Bytes::new(&e));
-        
+
         // Commit
-        let (commitment_hash, commitment) = CommitmentScheme::commit(&e, seed.clone(), 0, committer.clone());
+        let (commitment_hash, commitment) =
+            CommitmentScheme::commit(&e, seed.clone(), 0, committer.clone());
         assert!(commitment_hash.len() == 32);
         assert!(!commitment.revealed);
 
@@ -169,6 +165,10 @@ mod tests {
         };
 
         // Verify reveal matches commitment
-        assert!(CommitmentScheme::verify_reveal(&e, &commitment_hash, &reveal));
+        assert!(CommitmentScheme::verify_reveal(
+            &e,
+            &commitment_hash,
+            &reveal
+        ));
     }
 }

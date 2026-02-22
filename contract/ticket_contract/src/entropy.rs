@@ -1,7 +1,6 @@
 /// Entropy Management Module
 /// Manages randomness sources and provides secure entropy generation
 /// Combines Stellar ledger hash with optional oracle data for robust randomness
-
 use soroban_sdk::{contracttype, Bytes, Env};
 
 /// Entropy source configuration
@@ -77,7 +76,9 @@ impl EntropyManager {
 
         // Source 2: Ledger timestamp
         let timestamp = e.ledger().timestamp();
-        combined.extend_from_array(&timestamp.to_le_bytes()).unwrap();
+        combined
+            .extend_from_array(&timestamp.to_le_bytes())
+            .unwrap();
 
         // Source 3: Ledger sequence
         let sequence = e.ledger().sequence();
