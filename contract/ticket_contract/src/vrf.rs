@@ -1,7 +1,6 @@
 /// Verifiable Random Function (VRF) module for fair ticket allocation
 /// Implements cryptographic randomness using Soroban's native primitives
 /// for high-demand event ticket allocation with transparency and verifiability
-
 use soroban_sdk::{contracttype, Address, Bytes, Env, Symbol, Vec};
 
 /// VRF Configuration parameters
@@ -71,11 +70,7 @@ impl VRFEngine {
 
     /// Generate deterministic but unpredictable randomness using ledger hash and entropy
     /// Uses Stellar's ledger hash as entropy source combined with commit-reveal scheme
-    pub fn generate_vrf_randomness(
-        e: &Env,
-        input: Bytes,
-        nonce: u32,
-    ) -> (Bytes, VRFProof) {
+    pub fn generate_vrf_randomness(e: &Env, input: Bytes, nonce: u32) -> (Bytes, VRFProof) {
         let ledger_sequence = e.ledger().sequence();
         let ledger_hash = e.ledger().hash();
 
@@ -183,16 +178,12 @@ impl VRFEngine {
     }
 
     /// Generate proof bytes for verifiability
-    fn generate_proof_bytes(
-        e: &Env,
-        input: &Bytes,
-        ledger_sequence: u32,
-        nonce: u32,
-    ) -> Bytes {
+    fn generate_proof_bytes(e: &Env, input: &Bytes, ledger_sequence: u32, nonce: u32) -> Bytes {
         let mut proof_vec = Vec::new(e);
 
         // Combine input, ledger sequence, and nonce for proof
-        proof_vec.extend_from_array(&input.to_array::<32>().unwrap_or([0u8; 32]))
+        proof_vec
+            .extend_from_array(&input.to_array::<32>().unwrap_or([0u8; 32]))
             .unwrap();
         proof_vec
             .extend_from_array(&ledger_sequence.to_le_bytes())
@@ -209,7 +200,13 @@ impl VRFEngine {
 
         for randomness in randomness_values {
             combined
-                .extend_from_array(&randomness.proof.output.to_array::<32>().unwrap_or([0u8; 32]))
+                .extend_from_array(
+                    &randomness
+                        .proof
+                        .output
+                        .to_array::<32>()
+                        .unwrap_or([0u8; 32]),
+                )
                 .unwrap();
         }
 
@@ -218,11 +215,7 @@ impl VRFEngine {
 
     /// Anti-sniping: Time-based lock to prevent last-second randomness observation
     /// Returns true if current ledger is within anti-sniping window relative to finalization
-    pub fn is_in_anti_sniping_window(
-        e: &Env,
-        finalization_ledger: u32,
-        window_size: u32,
-    ) -> bool {
+    pub fn is_in_anti_sniping_window(e: &Env, finalization_ledger: u32, window_size: u32) -> bool {
         let current_ledger = e.ledger().sequence();
         current_ledger >= finalization_ledger && current_ledger < finalization_ledger + window_size
     }

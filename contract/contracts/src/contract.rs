@@ -1,7 +1,7 @@
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol};
 
 use crate::storage::*;
-use crate::types::{Config, Tier, UserInfo};
+use crate::types::{Config, DataKey, Tier, UserInfo};
 
 #[contract]
 pub struct StakingContract;
@@ -30,6 +30,7 @@ impl StakingContract {
         };
         write_config(&env, &config);
         write_last_update_time(&env, env.ledger().timestamp());
+        env.storage().instance().set(&DataKey::Version, &1u32);
         extend_instance(&env);
     }
 
@@ -287,6 +288,96 @@ impl StakingContract {
 
         token_client.transfer(&env.current_contract_address(), &user, &actual_amount);
         extend_instance(&env);
+    }
+
+    // --- UPGRADEABILITY MECHANISMS ---
+    // Schedule an upgrade with a timelock (e.g., 24 hours).
+    pub fn schedule_upgrade(env: Env, new_wasm_hash: BytesN<32>, unlock_time: u64) {
+        let config = read_config(&env);
+        config.admin.require_auth();
+
+        if env.ledger().timestamp() >= unlock_time {
+            panic!("unlock_time must be in the future");
+        }
+
+        env.storage().instance().set(
+            &DataKey::UpgradeTimelock,
+            &(new_wasm_hash.clone(), unlock_time),
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "UpgradeScheduled"),),
+            (new_wasm_hash, unlock_time),
+        );
+        extend_instance(&env);
+    }
+
+    // Cancel a scheduled upgrade. (Rollback mechanism before execution)
+    pub fn cancel_upgrade(env: Env) {
+        let config = read_config(&env);
+        config.admin.require_auth();
+
+        env.storage().instance().remove(&DataKey::UpgradeTimelock);
+        env.events()
+            .publish((Symbol::new(&env, "UpgradeCancelled"),), ());
+        extend_instance(&env);
+    }
+
+    // Execute the scheduled upgrade.
+    pub fn execute_upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let config = read_config(&env);
+        config.admin.require_auth();
+
+        let (scheduled_hash, unlock_time): (BytesN<32>, u64) = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeTimelock)
+            .unwrap_or_else(|| panic!("no upgrade scheduled"));
+
+        if scheduled_hash != new_wasm_hash {
+            panic!("wasm hash does not match scheduled");
+        }
+        if env.ledger().timestamp() < unlock_time {
+            panic!("timelock not expired");
+        }
+
+        // Clear the timelock so it can't be reused
+        env.storage().instance().remove(&DataKey::UpgradeTimelock);
+
+        // Perform the upgrade
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+
+        env.events()
+            .publish((Symbol::new(&env, "Upgraded"),), new_wasm_hash);
+    }
+
+    // Execute a state migration after an upgrade.
+    pub fn migrate_state(env: Env, new_version: u32) {
+        let config = read_config(&env);
+        config.admin.require_auth();
+
+        let current_version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
+        if new_version <= current_version {
+            panic!("new_version must be > current_version");
+        }
+
+        // State migration logic goes here...
+        // e.g., if current_version < 2 { migrate_v1_to_v2(&env); }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &new_version);
+        env.events().publish(
+            (Symbol::new(&env, "StateMigrated"),),
+            (current_version, new_version),
+        );
+        extend_instance(&env);
+    }
+
+    // Get current contract version
+    pub fn version(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::Version).unwrap_or(1)
     }
 }
 

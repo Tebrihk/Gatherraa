@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Bytes, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Events, Ledger},
+    Bytes, BytesN, Env, String,
+};
 
 const TICKET_WASM: &[u8] = include_bytes!("./mock/ticket_contract.wasm");
 
@@ -123,4 +126,39 @@ fn test_transfer_ownership() {
     let to_events_after = factory.get_events_by_organizer(&to_organizer);
     assert_eq!(to_events_after.len(), 1);
     assert_eq!(to_events_after.get(0).unwrap(), event_id);
+}
+
+#[test]
+fn test_upgrade_flow() {
+    let (e, admin, _organizer, wasm_hash) = setup_test();
+    let factory_id = e.register(EventFactoryContract, ());
+    let factory = EventFactoryContractClient::new(&e, &factory_id);
+    factory.initialize(&admin, &wasm_hash);
+
+    // Initial version should be 1
+    assert_eq!(factory.version(), 1);
+
+    let new_wasm_hash = wasm_hash;
+    let current_timestamp = e.ledger().timestamp();
+    let unlock_time = current_timestamp + 86400; // 24 hours later
+
+    // Schedule upgrade
+    factory.schedule_upgrade(&new_wasm_hash, &unlock_time);
+
+    // Cancel upgrade (rollback)
+    factory.cancel_upgrade();
+    // Reschedule
+    factory.schedule_upgrade(&new_wasm_hash, &unlock_time);
+
+    // Advance time past unlock_time
+    let mut ledger = e.ledger().get();
+    ledger.timestamp = unlock_time + 1;
+    e.ledger().set(ledger);
+
+    // Migrate state
+    factory.migrate_state(&2);
+    assert_eq!(factory.version(), 2);
+
+    // Execute upgrade
+    factory.execute_upgrade(&new_wasm_hash);
 }
