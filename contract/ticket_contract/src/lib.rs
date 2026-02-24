@@ -3,7 +3,9 @@
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Bytes, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+};
 use stellar_access::ownable::{self as ownable, Ownable};
 use stellar_tokens::non_fungible::{Base, NonFungibleToken};
 
@@ -63,6 +65,9 @@ impl SoulboundTicketContract {
 
         // Init Token Counter
         e.storage().instance().set(&DataKey::TokenIdCounter, &0u32);
+
+        // Init Version
+        e.storage().instance().set(&DataKey::Version, &1u32);
 
         // Init default PricingConfig (placeholder addresses, standard bounds)
         let default_config = PricingConfig {
@@ -136,7 +141,7 @@ impl SoulboundTicketContract {
 
         e.storage()
             .persistent()
-            .set(&DataKey::AllocationState(tier_symbol), &config);
+            .set(&DataKey::AllocationState(tier_symbol.clone()), &config);
 
         // Initialize anti-sniping config
         let anti_sniping = AllocAntiSnipingConfig {
@@ -158,7 +163,11 @@ impl SoulboundTicketContract {
 
         // Check anti-sniping
         let anti_sniping_key = DataKey::AntiSnipingConfig(tier_symbol.clone());
-        if let Some(anti_sniping) = e.storage().persistent().get::<_, AllocAntiSnipingConfig>(&anti_sniping_key) {
+        if let Some(anti_sniping) = e
+            .storage()
+            .persistent()
+            .get::<_, AllocAntiSnipingConfig>(&anti_sniping_key)
+        {
             let mut recent_entries: Vec<LotteryEntry> = Vec::new(e);
             let count_key = DataKey::LotteryEntryCount(tier_symbol.clone());
             let entry_count: u32 = e.storage().persistent().get(&count_key).unwrap_or(0);
@@ -173,7 +182,12 @@ impl SoulboundTicketContract {
                 }
             }
 
-            if !AllocationEngine::check_anti_sniping(e, &participant, &anti_sniping, &recent_entries) {
+            if !AllocationEngine::check_anti_sniping(
+                e,
+                &participant,
+                &anti_sniping,
+                &recent_entries,
+            ) {
                 panic!("Rate limit exceeded for this participant");
             }
         }
@@ -198,7 +212,11 @@ impl SoulboundTicketContract {
     }
 
     /// Generate batch randomness for lottery finalization
-    pub fn generate_lottery_randomness(e: &Env, tier_symbol: Symbol, batch_size: u32) -> Vec<RandomnessOutput> {
+    pub fn generate_lottery_randomness(
+        e: &Env,
+        tier_symbol: Symbol,
+        batch_size: u32,
+    ) -> Vec<RandomnessOutput> {
         let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
 
@@ -230,19 +248,13 @@ impl SoulboundTicketContract {
             finalization_ledger: state.finalization_ledger,
         };
 
-        e.storage()
-            .persistent()
-            .set(&DataKey::VRFState, &vrf_state);
+        e.storage().persistent().set(&DataKey::VRFState, &vrf_state);
 
         randomness_outputs
     }
 
     /// Execute lottery allocation based on registered entries and randomness
-    pub fn execute_lottery_allocation(
-        e: &Env,
-        tier_symbol: Symbol,
-        randomness_values: Vec<u128>,
-    ) {
+    pub fn execute_lottery_allocation(e: &Env, tier_symbol: Symbol, randomness_values: Vec<u128>) {
         let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
 
@@ -285,12 +297,18 @@ impl SoulboundTicketContract {
             AllocationStrategyType::FCFS => {
                 AllocationEngine::allocate_fcfs(e, &entries, state.total_allocations)
             }
-            AllocationStrategyType::Lottery => {
-                AllocationEngine::allocate_lottery(e, &entries, &randomness_values, state.total_allocations)
-            }
-            AllocationStrategyType::TimeWeighted => {
-                AllocationEngine::allocate_time_weighted(e, &entries, &randomness_values, state.total_allocations)
-            }
+            AllocationStrategyType::Lottery => AllocationEngine::allocate_lottery(
+                e,
+                &entries,
+                &randomness_values,
+                state.total_allocations,
+            ),
+            AllocationStrategyType::TimeWeighted => AllocationEngine::allocate_time_weighted(
+                e,
+                &entries,
+                &randomness_values,
+                state.total_allocations,
+            ),
             _ => {
                 panic!("Strategy not yet implemented");
             }
@@ -304,9 +322,7 @@ impl SoulboundTicketContract {
         // Update state
         state.allocated_count = (results.len() as u32).min(state.total_allocations);
         state.allocation_complete = true;
-        e.storage()
-            .persistent()
-            .set(&state_key, &state);
+        e.storage().persistent().set(&state_key, &state);
     }
 
     /// Verify a randomness proof
@@ -639,6 +655,90 @@ impl SoulboundTicketContract {
             .persistent()
             .get(&DataKey::Ticket(token_id))
             .unwrap()
+    }
+
+    // --- UPGRADEABILITY MECHANISMS ---
+    // Schedule an upgrade with a timelock (e.g., 24 hours).
+    pub fn schedule_upgrade(e: &Env, new_wasm_hash: BytesN<32>, unlock_time: u64) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if e.ledger().timestamp() >= unlock_time {
+            panic!("unlock_time must be in the future");
+        }
+
+        e.storage().instance().set(
+            &DataKey::UpgradeTimelock,
+            &(new_wasm_hash.clone(), unlock_time),
+        );
+
+        e.events().publish(
+            (Symbol::new(&e, "UpgradeScheduled"),),
+            (new_wasm_hash, unlock_time),
+        );
+    }
+
+    // Cancel a scheduled upgrade. (Rollback mechanism before execution)
+    pub fn cancel_upgrade(e: &Env) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        e.storage().instance().remove(&DataKey::UpgradeTimelock);
+        e.events()
+            .publish((Symbol::new(&e, "UpgradeCancelled"),), ());
+    }
+
+    // Execute the scheduled upgrade.
+    pub fn execute_upgrade(e: &Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        let (scheduled_hash, unlock_time): (BytesN<32>, u64) = e
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeTimelock)
+            .unwrap_or_else(|| panic!("no upgrade scheduled"));
+
+        if scheduled_hash != new_wasm_hash {
+            panic!("wasm hash does not match scheduled");
+        }
+        if e.ledger().timestamp() < unlock_time {
+            panic!("timelock not expired");
+        }
+
+        // Clear the timelock so it can't be reused
+        e.storage().instance().remove(&DataKey::UpgradeTimelock);
+
+        // Perform the upgrade
+        e.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+
+        e.events()
+            .publish((Symbol::new(&e, "Upgraded"),), new_wasm_hash);
+    }
+
+    // Execute a state migration after an upgrade.
+    pub fn migrate_state(e: &Env, new_version: u32) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        let current_version: u32 = e.storage().instance().get(&DataKey::Version).unwrap_or(1);
+        if new_version <= current_version {
+            panic!("new_version must be > current_version");
+        }
+
+        // State migration logic goes here...
+
+        e.storage().instance().set(&DataKey::Version, &new_version);
+        e.events().publish(
+            (Symbol::new(&e, "StateMigrated"),),
+            (current_version, new_version),
+        );
+    }
+
+    // Get current contract version
+    pub fn version(e: &Env) -> u32 {
+        e.storage().instance().get(&DataKey::Version).unwrap_or(1)
     }
 }
 

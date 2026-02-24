@@ -7,4 +7,6 @@ pub enum DataKey {
     EventWasmHash,            // BytesN<32> of the event contract WASM
     Paused,                   // bool indicating if new events can be created
     OrganizerEvents(Address), // Mapping from an organizer Address to Vec<Address> of event contracts
+    UpgradeTimelock,
+    Version,
 }

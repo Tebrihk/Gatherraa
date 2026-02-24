@@ -7,7 +7,7 @@ mod storage_types;
 use storage_types::DataKey;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Vec,
+    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 #[contract]
@@ -25,6 +25,7 @@ impl EventFactoryContract {
             .instance()
             .set(&DataKey::EventWasmHash, &event_wasm_hash);
         e.storage().instance().set(&DataKey::Paused, &false);
+        e.storage().instance().set(&DataKey::Version, &1u32);
     }
 
     pub fn pause(e: Env) {
@@ -164,5 +165,89 @@ impl EventFactoryContract {
         #[allow(deprecated)]
         e.events()
             .publish((symbol_short!("transfer"), event), (from, to));
+    }
+
+    // --- UPGRADEABILITY MECHANISMS ---
+    // Schedule an upgrade with a timelock (e.g., 24 hours).
+    pub fn schedule_upgrade(e: Env, new_wasm_hash: BytesN<32>, unlock_time: u64) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if e.ledger().timestamp() >= unlock_time {
+            panic!("unlock_time must be in the future");
+        }
+
+        e.storage().instance().set(
+            &DataKey::UpgradeTimelock,
+            &(new_wasm_hash.clone(), unlock_time),
+        );
+
+        e.events().publish(
+            (Symbol::new(&e, "UpgradeScheduled"),),
+            (new_wasm_hash, unlock_time),
+        );
+    }
+
+    // Cancel a scheduled upgrade. (Rollback mechanism before execution)
+    pub fn cancel_upgrade(e: Env) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        e.storage().instance().remove(&DataKey::UpgradeTimelock);
+        e.events()
+            .publish((Symbol::new(&e, "UpgradeCancelled"),), ());
+    }
+
+    // Execute the scheduled upgrade.
+    pub fn execute_upgrade(e: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        let (scheduled_hash, unlock_time): (BytesN<32>, u64) = e
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeTimelock)
+            .unwrap_or_else(|| panic!("no upgrade scheduled"));
+
+        if scheduled_hash != new_wasm_hash {
+            panic!("wasm hash does not match scheduled");
+        }
+        if e.ledger().timestamp() < unlock_time {
+            panic!("timelock not expired");
+        }
+
+        // Clear the timelock so it can't be reused
+        e.storage().instance().remove(&DataKey::UpgradeTimelock);
+
+        // Perform the upgrade
+        e.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+
+        e.events()
+            .publish((Symbol::new(&e, "Upgraded"),), new_wasm_hash);
+    }
+
+    // Execute a state migration after an upgrade.
+    pub fn migrate_state(e: Env, new_version: u32) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        let current_version: u32 = e.storage().instance().get(&DataKey::Version).unwrap_or(1);
+        if new_version <= current_version {
+            panic!("new_version must be > current_version");
+        }
+
+        // State migration logic goes here...
+
+        e.storage().instance().set(&DataKey::Version, &new_version);
+        e.events().publish(
+            (Symbol::new(&e, "StateMigrated"),),
+            (current_version, new_version),
+        );
+    }
+
+    // Get current contract version
+    pub fn version(e: Env) -> u32 {
+        e.storage().instance().get(&DataKey::Version).unwrap_or(1)
     }
 }

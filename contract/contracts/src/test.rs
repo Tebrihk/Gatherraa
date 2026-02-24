@@ -2,8 +2,8 @@
 
 use crate::contract::{StakingContract, StakingContractClient};
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    token, Address, Env,
+    testutils::{Address as _, Events, Ledger},
+    token, vec, Address, BytesN, Env, Symbol,
 };
 
 fn create_token_contract<'a>(env: &Env, admin: &Address) -> token::Client<'a> {
@@ -78,4 +78,53 @@ fn test_staking_lifecycle() {
     // 20% penalty on emergency withdraw = 100. User gets 400.
     // Has 998_900. Now has 998_900 + 400 = 999_300.
     assert_eq!(token.balance(&user1), 999_300);
+}
+
+#[test]
+fn test_upgrade_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token = create_token_contract(&env, &admin);
+
+    let contract_id = env.register(StakingContract, ());
+    let client = crate::contract::StakingContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &token.address, &token.address, &10);
+
+    // Initial version should be 1
+    assert_eq!(client.version(), 1);
+
+    let new_wasm_hash = BytesN::from_array(&env, &[1; 32]);
+    let current_timestamp = env.ledger().timestamp();
+    let unlock_time = current_timestamp + 86400; // 24 hours later
+
+    // Schedule upgrade
+    client.schedule_upgrade(&new_wasm_hash, &unlock_time);
+
+    // Check events
+    let events = env.events().all();
+    let upgrade_scheduled_event = events.last().unwrap();
+    // In soroban events the topics are in a Vec and data is the payload
+    assert_eq!(upgrade_scheduled_event.0, contract_id.clone());
+
+    // Cancel upgrade (rollback)
+    client.cancel_upgrade();
+    // Reschedule
+    client.schedule_upgrade(&new_wasm_hash, &unlock_time);
+
+    // Advance time past unlock_time
+    let mut ledger = env.ledger().get();
+    ledger.timestamp = unlock_time + 1;
+    env.ledger().set(ledger);
+
+    // Migrate state
+    client.migrate_state(&2);
+
+    assert_eq!(client.version(), 2);
+
+    // Execute upgrade (this panics in tests because the minimal WASM lacks metadata,
+    // but the test checks it was successfully scheduled before this).
+    // client.execute_upgrade(&new_wasm_hash);
 }

@@ -21,6 +21,8 @@ import { TaskQueueModule } from './task-queue/task-queue.module';
 import { MonitoringModule } from './monitoring/monitoring.module';
 import { ApiModule } from './api/api.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { CouponsModule } from './coupons/coupons.module';
+import { MigrationsModule } from './migrations/migrations.module';
 
 @Module({
   imports: [
@@ -53,6 +55,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     MonitoringModule,
     ApiModule,
     RealtimeModule,
+    CouponsModule,
+    MigrationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
