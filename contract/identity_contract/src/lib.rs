@@ -62,8 +62,8 @@ impl IdentityRegistryContract {
         e.storage().persistent().set(&DataKey::AddressToDID(user.clone()), &did_string);
         
         // Update total DIDs count
-        let total_dids: u32 = e.storage().instance().get(&DataKey::TotalDIDs).unwrap();
-        e.storage().instance().set(&DataKey::TotalDIDs, &(total_dids + 1));
+        let next_total_dids = total_dids.checked_add(1).expect("DID count overflow");
+        e.storage().instance().set(&DataKey::TotalDIDs, &next_total_dids);
         
         extend_persistent(&e, &DataKey::DID(did_string.clone()));
         extend_persistent(&e, &DataKey::AddressToDID(user));
@@ -116,7 +116,8 @@ impl IdentityRegistryContract {
         did_doc.updated = e.ledger().timestamp();
         
         e.storage().persistent().set(&DataKey::DID(did.clone()), &did_doc);
-        e.storage().instance().set(&DataKey::NextClaimId, &(claim_id + 1));
+        let next_claim_id = claim_id.checked_add(1).expect("Claim ID overflow");
+        e.storage().instance().set(&DataKey::NextClaimId, &next_claim_id);
         
         extend_persistent(&e, &DataKey::DID(did));
         
@@ -161,7 +162,7 @@ impl IdentityRegistryContract {
         
         claim_obj.verified = true;
         did_doc.claims.set(claim_index, claim_obj);
-        did_doc.reputation_score += VERIFIED_CREDENTIAL_SCORE;
+        did_doc.reputation_score = did_doc.reputation_score.checked_add(VERIFIED_CREDENTIAL_SCORE).expect("Reputation overflow");
         did_doc.updated = e.ledger().timestamp();
         
         e.storage().persistent().set(&DataKey::DID(did.clone()), &did_doc);
@@ -240,7 +241,8 @@ impl IdentityRegistryContract {
         let mut did_doc = get_did_document(&e, &did);
         
         // Add attendance score
-        did_doc.reputation_score += score.min(EVENT_ATTENDANCE_SCORE);
+        let increment = score.min(EVENT_ATTENDANCE_SCORE);
+        did_doc.reputation_score = did_doc.reputation_score.checked_add(increment).expect("Reputation overflow");
         did_doc.updated = e.ledger().timestamp();
         
         e.storage().persistent().set(&DataKey::DID(did.clone()), &did_doc);

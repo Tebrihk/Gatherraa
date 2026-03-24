@@ -123,7 +123,7 @@ impl MultisigWalletContract {
         
         // Check if timelock is required
         let timelock_until = if amount >= config.timelock_threshold {
-            e.ledger().timestamp() + config.timelock_duration
+            e.ledger().timestamp().checked_add(config.timelock_duration).expect("Time overflow")
         } else {
             0
         };
@@ -138,7 +138,7 @@ impl MultisigWalletContract {
             signatures: Vec::new(&e),
             status: TransactionStatus::Proposed,
             created_at: e.ledger().timestamp(),
-            expires_at: e.ledger().timestamp() + config.transaction_expiry,
+            expires_at: e.ledger().timestamp().checked_add(config.transaction_expiry).expect("Time overflow"),
             timelock_until,
             batch_id: None,
         };
@@ -314,7 +314,7 @@ impl MultisigWalletContract {
             signatures: Vec::new(&e),
             status: BatchStatus::Proposed,
             created_at: e.ledger().timestamp(),
-            expires_at: e.ledger().timestamp() + config.transaction_expiry,
+            expires_at: e.ledger().timestamp().checked_add(config.transaction_expiry).expect("Time overflow"),
         };
 
         // Store batch
@@ -438,7 +438,7 @@ impl MultisigWalletContract {
         e.storage().instance().set(&DataKey::Frozen, &true);
         
         // Schedule unfreeze
-        e.storage().instance().set(&symbol_short!("unfreeze_time"), &(e.ledger().timestamp() + duration));
+        e.storage().instance().set(&symbol_short!("unfreeze_time"), &(e.ledger().timestamp().checked_add(duration).expect("Time overflow")));
 
         #[allow(deprecated)]
         e.events().publish(
@@ -623,7 +623,7 @@ impl MultisigWalletContract {
         for signature in transaction.signatures.iter() {
             for signer in signers.iter() {
                 if signer.address == signature && signer.active {
-                    total_weight += signer.weight;
+                    total_weight = total_weight.checked_add(signer.weight).expect("Weight overflow");
                     break;
                 }
             }
@@ -639,7 +639,7 @@ impl MultisigWalletContract {
         for signature in batch.signatures.iter() {
             for signer in signers.iter() {
                 if signer.address == signature && signer.active {
-                    total_weight += signer.weight;
+                    total_weight = total_weight.checked_add(signer.weight).expect("Weight overflow");
                     break;
                 }
             }
@@ -659,7 +659,8 @@ impl MultisigWalletContract {
                 limit: config.daily_spending_limit,
             });
         
-        if daily_spending.spent + transaction.amount > daily_spending.limit {
+        let total_spent_today = daily_spending.spent.checked_add(transaction.amount).expect("Spending overflow");
+        if total_spent_today > daily_spending.limit {
             return Err(MultisigError::DailySpendingLimitExceeded);
         }
         
@@ -677,7 +678,7 @@ impl MultisigWalletContract {
                 limit: config.daily_spending_limit,
             });
         
-        daily_spending.spent += transaction.amount;
+        daily_spending.spent = daily_spending.spent.checked_add(transaction.amount).expect("Spending overflow");
         e.storage().persistent().set(&DataKey::DailySpending(today), &daily_spending);
     }
 

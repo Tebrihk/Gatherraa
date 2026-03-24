@@ -33,7 +33,7 @@ impl WhitelistContract {
         admin.require_auth();
         
         let mut count: u32 = env.storage().instance().get(&DataKey::CampaignCount).unwrap_or(0);
-        count += 1;
+        count = count.checked_add(1).expect("Campaign count overflow");
         
         let campaign = Campaign {
             admin,
@@ -142,7 +142,7 @@ impl WhitelistContract {
         }
 
         // Update state
-        campaign.claimed_amount += amount;
+        campaign.claimed_amount = campaign.claimed_amount.checked_add(amount).expect("Arithmetic overflow");
         if campaign.claimed_amount > campaign.total_amount {
             panic!("insufficient funds in campaign");
         }
@@ -167,7 +167,7 @@ impl WhitelistContract {
             panic!("already refunded");
         }
 
-        let remaining = campaign.total_amount - campaign.claimed_amount;
+        let remaining = campaign.total_amount.checked_sub(campaign.claimed_amount).expect("Arithmetic overflow");
         if remaining > 0 {
             let token_client = token::Client::new(&env, &campaign.token);
             token_client.transfer(&env.current_contract_address(), &campaign.admin, &remaining);

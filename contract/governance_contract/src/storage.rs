@@ -79,3 +79,24 @@ pub struct VoteRecord {
     pub amount: i128,
     pub is_quadratic: bool,
 }
+#[soroban_sdk::contracterror]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum GovernanceError {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    Unauthorized = 3,
+    ProposalNotFound = 4,
+    InvalidProposal = 5,
+    VotingEnded = 6,
+    InsufficientBalance = 7,
+    InvalidAmount = 8,
+    AlreadyVoted = 9,
+    NotDelegatee = 10,
+    InvalidDelegatee = 11,
+    VotingStillActive = 12,
+    ProposalNotQueued = 13,
+    TimelockNotExpired = 14,
+    CategorySettingsNotFound = 15,
+    ArithmeticError = 16,
+}

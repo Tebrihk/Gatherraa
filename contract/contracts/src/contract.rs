@@ -8,6 +8,9 @@ pub struct StakingContract;
 
 const PRECISION: i128 = 1_000_000_000;
 
+/// Reentrancy guard key
+const REENTRANCY_GUARD: Symbol = symbol_short!("reentrant");
+
 #[contractimpl]
 impl StakingContract {
     pub fn initialize(
@@ -21,6 +24,11 @@ impl StakingContract {
         if env.storage().instance().has(&crate::types::DataKey::Config) {
             panic!("already initialized");
         }
+
+        // Validate addresses
+        Self::validate_address(&env, &admin);
+        Self::validate_contract_address(&env, &staking_token);
+        Self::validate_contract_address(&env, &reward_token);
 
         let config = Config {
             admin,
@@ -47,8 +55,15 @@ impl StakingContract {
     }
 
     pub fn stake(env: Env, user: Address, amount: i128, lock_duration: u64, tier_id: u32) {
+        // Reentrancy protection
+        if env.storage().instance().has(&REENTRANCY_GUARD) {
+            panic!("reentrant call detected");
+        }
+        env.storage().instance().set(&REENTRANCY_GUARD, &true);
+
         user.require_auth();
         if amount <= 0 {
+            env.storage().instance().remove(&REENTRANCY_GUARD);
             panic!("amount must be > 0");
         }
 
@@ -56,9 +71,20 @@ impl StakingContract {
 
         let config = read_config(&env);
 
-        // Transfer staking tokens from user to contract
+        // Transfer staking tokens from user to contract with error handling
         let token_client = token::Client::new(&env, &config.staking_token);
-        token_client.transfer(&user, &env.current_contract_address(), &amount);
+        let contract_address = env.current_contract_address();
+        
+        match token_client.try_transfer(&user, &contract_address, &amount) {
+            Ok(Ok(())) => {
+                env.events().publish((symbol_short!("stake_transfer_success"),), amount);
+            },
+            _ => {
+                env.storage().instance().remove(&REENTRANCY_GUARD);
+                env.events().publish((symbol_short!("stake_transfer_failed"),), amount);
+                panic!("token transfer failed");
+            }
+        }
 
         let mut user_info = read_user_info(&env, &user).unwrap_or(UserInfo {
             amount: 0,
@@ -79,6 +105,7 @@ impl StakingContract {
             reward_multiplier: 100,
         });
         if user_info.amount < tier.min_amount {
+            env.storage().instance().remove(&REENTRANCY_GUARD);
             panic!("insufficient amount for tier");
         }
 
@@ -103,10 +130,17 @@ impl StakingContract {
         total_shares += diff_shares;
         write_total_shares(&env, total_shares);
 
+        env.storage().instance().remove(&REENTRANCY_GUARD);
         extend_instance(&env);
     }
 
     pub fn claim(env: Env, user: Address, compound: bool) {
+        // Reentrancy protection
+        if env.storage().instance().has(&REENTRANCY_GUARD) {
+            panic!("reentrant call detected");
+        }
+        env.storage().instance().set(&REENTRANCY_GUARD, &true);
+
         user.require_auth();
         update_reward(&env, Some(&user));
 
@@ -124,6 +158,7 @@ impl StakingContract {
                 // To compound, we would stake the reward. But reward token and staking token might differ.
                 // Assuming they are the same for compounding to work seamlessly, or they trade them if we had a dex.
                 if config.staking_token != config.reward_token {
+                    env.storage().instance().remove(&REENTRANCY_GUARD);
                     panic!("cannot compound: reward token differs from staking token");
                 }
 
@@ -146,15 +181,33 @@ impl StakingContract {
                 total_shares += diff_shares;
                 write_total_shares(&env, total_shares);
             } else {
-                reward_token.transfer(&env.current_contract_address(), &user, &reward);
+                match reward_token.try_transfer(&env.current_contract_address(), &user, &reward) {
+                    Ok(Ok(())) => {
+                        env.events().publish((symbol_short!("claim_transfer_success"),), reward);
+                    },
+                    _ => {
+                        env.storage().instance().remove(&REENTRANCY_GUARD);
+                        env.events().publish((symbol_short!("claim_transfer_failed"),), reward);
+                        panic!("reward transfer failed");
+                    }
+                }
             }
         }
+
+        env.storage().instance().remove(&REENTRANCY_GUARD);
         extend_instance(&env);
     }
 
     pub fn unstake(env: Env, user: Address, amount: i128) {
+        // Reentrancy protection
+        if env.storage().instance().has(&REENTRANCY_GUARD) {
+            panic!("reentrant call detected");
+        }
+        env.storage().instance().set(&REENTRANCY_GUARD, &true);
+
         user.require_auth();
         if amount <= 0 {
+            env.storage().instance().remove(&REENTRANCY_GUARD);
             panic!("amount must be > 0");
         }
 
@@ -162,6 +215,7 @@ impl StakingContract {
 
         let mut user_info = read_user_info(&env, &user).expect("user not found");
         if user_info.amount < amount {
+            env.storage().instance().remove(&REENTRANCY_GUARD);
             panic!("insufficient balance");
         }
 
@@ -209,7 +263,18 @@ impl StakingContract {
         write_total_shares(&env, total_shares);
 
         let token_client = token::Client::new(&env, &config.staking_token);
-        token_client.transfer(&env.current_contract_address(), &user, &actual_amount);
+        match token_client.try_transfer(&env.current_contract_address(), &user, &actual_amount) {
+            Ok(Ok(())) => {
+                env.events().publish((symbol_short!("unstake_transfer_success"),), actual_amount);
+            },
+            _ => {
+                env.storage().instance().remove(&REENTRANCY_GUARD);
+                env.events().publish((symbol_short!("unstake_transfer_failed"),), actual_amount);
+                panic!("unstake transfer failed");
+            }
+        }
+
+        env.storage().instance().remove(&REENTRANCY_GUARD);
         extend_instance(&env);
     }
 
@@ -415,4 +480,21 @@ fn update_reward(env: &Env, user: Option<&Address>) {
         user_info.reward_per_token_paid = rpt_stored;
         write_user_info(env, u, &user_info);
     }
+}
+
+/// Validates that an address is not zero
+fn validate_address(env: &Env, address: &Address) {
+    // Check if address is zero
+    if address == &Address::from_contract_id(&BytesN::from_array(env, &[0; 32])) {
+        panic!("zero address not allowed");
+    }
+}
+
+/// Validates that an address points to a deployed token contract
+fn validate_contract_address(env: &Env, address: &Address) {
+    validate_address(env, address);
+    // Try to call a token interface method to verify it's a token contract
+    let token_client = token::Client::new(env, address);
+    // This will fail if not a valid token contract
+    let _ = token_client.decimals();
 }

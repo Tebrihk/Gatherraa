@@ -76,3 +76,24 @@ pub struct GiftSubscription {
     pub claimed: bool,
     pub created_at: u64,
 }
+#[soroban_sdk::contracterror]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum SubscriptionError {
+    AlreadyInitialized = 1,
+    Unauthorized = 2,
+    PlanNotFound = 3,
+    SubscriptionNotFound = 4,
+    ActiveSubscriptionExists = 5,
+    PlanNotActive = 6,
+    InsufficientBalance = 7,
+    InvalidAmount = 8,
+    CancellationNotAllowed = 9,
+    PauseNotAllowed = 10,
+    NotPaused = 11,
+    GiftNotFound = 12,
+    GiftNotForUser = 13,
+    GiftAlreadyClaimed = 14,
+    GracePeriodExpired = 15,
+    ArithmeticError = 16,
+}

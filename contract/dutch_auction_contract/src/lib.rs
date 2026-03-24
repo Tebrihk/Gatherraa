@@ -89,7 +89,7 @@ impl DutchAuctionContract {
             winner_commitments: map![&e],
             final_extension_time: 0,
             anti_bot_enabled: anti_bot_enabled.unwrap_or(config.anti_bot_enabled),
-            min_bid_increment: min_bid_increment.unwrap_or(initial_price / 100), // Default 1%
+            min_bid_increment: min_bid_increment.unwrap_or(initial_price.checked_div(100).expect("Arithmetic error")), // Default 1%
         };
 
         // Store auction
@@ -151,7 +151,8 @@ impl DutchAuctionContract {
             panic!("auction not active");
         }
 
-        if e.ledger().timestamp() > auction.start_time + auction.duration {
+        let end_time = auction.start_time.checked_add(auction.duration).expect("Time overflow");
+        if e.ledger().timestamp() > end_time {
             panic!("auction ended");
         }
 
@@ -266,7 +267,8 @@ impl DutchAuctionContract {
             panic!("auction not active");
         }
 
-        let end_time = auction.start_time + auction.duration + auction.final_extension_time;
+        let total_duration = auction.duration.checked_add(auction.final_extension_time).expect("Time overflow");
+        let end_time = auction.start_time.checked_add(total_duration).expect("Time overflow");
         if e.ledger().timestamp() < end_time {
             panic!("auction not ended");
         }
@@ -330,7 +332,8 @@ impl DutchAuctionContract {
         }
 
         let elapsed = e.ledger().timestamp().saturating_sub(auction.start_time);
-        let time_elapsed = elapsed.min(auction.duration + auction.final_extension_time);
+        let total_duration = auction.duration.checked_add(auction.final_extension_time).expect("Time overflow");
+        let time_elapsed = elapsed.min(total_duration);
         
         Self::calculate_price(auction.initial_price, auction.floor_price, auction.decay_constant, time_elapsed)
     }
@@ -447,25 +450,31 @@ impl DutchAuctionContract {
         // Exponential decay: P(t) = P0 * e^(-kt) + floor_price
         // Using integer arithmetic approximation
         let decay_factor = decay_constant as u64;
-        let decay_numerator = decay_factor * time_elapsed;
+        let decay_numerator = decay_factor.checked_mul(time_elapsed).expect("Arithmetic overflow");
         
         // Prevent overflow
         if decay_numerator > 1000000 {
             return floor_price;
         }
 
-        let decay_multiplier = 1000000 - (decay_numerator / 100); // Simplified decay
+        let decay_div = decay_numerator.checked_div(100).expect("Arithmetic error");
+        if decay_div >= 1000000 {
+            return floor_price;
+        }
+        let decay_multiplier = 1000000 - decay_div; // Simplified decay
         if decay_multiplier <= 0 {
             return floor_price;
         }
 
-        let price_above_floor = (initial_price - floor_price) * decay_multiplier as i128 / 1000000;
-        floor_price + price_above_floor
+        let initial_floor_diff = initial_price.checked_sub(floor_price).expect("Arithmetic error");
+        let price_above_floor = initial_floor_diff.checked_mul(decay_multiplier as i128).and_then(|v| v.checked_div(1000000)).expect("Arithmetic overflow");
+        floor_price.checked_add(price_above_floor).expect("Arithmetic overflow")
     }
 
     fn process_bid(e: &Env, auction: &mut Auction, bidder: &Address, amount: i128) -> Result<(), DutchAuctionError> {
         // Check if auction is still active
-        let end_time = auction.start_time + auction.duration + auction.final_extension_time;
+        let total_duration = auction.duration.checked_add(auction.final_extension_time).expect("Time overflow");
+        let end_time = auction.start_time.checked_add(total_duration).expect("Time overflow");
         if e.ledger().timestamp() > end_time {
             return Err(DutchAuctionError::AuctionEnded);
         }
@@ -486,7 +495,8 @@ impl DutchAuctionContract {
         // Check minimum bid increment
         if !auction.bids.is_empty() {
             let highest_bid = auction.bids.iter().map(|b| b.amount).max().unwrap();
-            if amount < highest_bid + auction.min_bid_increment {
+            let min_increment_bid = highest_bid.checked_add(auction.min_bid_increment).expect("Arithmetic overflow");
+            if amount < min_increment_bid {
                 return Err(DutchAuctionError::BidTooLow);
             }
         }
@@ -516,8 +526,9 @@ impl DutchAuctionContract {
         auction.current_price = current_price;
 
         // Check for auction extension
-        if e.ledger().timestamp() > end_time - auction.extension_threshold {
-            auction.final_extension_time += auction.extension_duration;
+        let extension_point = end_time.checked_sub(auction.extension_threshold).expect("Time error");
+        if e.ledger().timestamp() > extension_point {
+            auction.final_extension_time = auction.final_extension_time.checked_add(auction.extension_duration).expect("Time overflow");
         }
 
         // Add to user's bids

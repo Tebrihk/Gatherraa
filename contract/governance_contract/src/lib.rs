@@ -71,7 +71,7 @@ impl GovernanceContract {
             .expect("Category settings not found");
 
         let mut count: u32 = env.storage().instance().get(&DataKey::ProposalCount).unwrap_or(0);
-        count += 1;
+        count = count.checked_add(1).expect("Proposal count overflow");
 
         let proposal = Proposal {
             id: count,
@@ -80,7 +80,7 @@ impl GovernanceContract {
             category,
             description,
             start_ledger: env.ledger().sequence(),
-            end_ledger: env.ledger().sequence() + settings.voting_period,
+            end_ledger: env.ledger().sequence().checked_add(settings.voting_period).expect("Ledger overflow"),
             total_votes_for: 0,
             total_votes_against: 0,
             status: ProposalStatus::Active,
@@ -122,7 +122,7 @@ impl GovernanceContract {
         if !env.storage().persistent().has(&DataKey::Vote(proposal_id, voter.clone())) {
             let balance = token_client.balance(&voter);
             let power = if use_quadratic { Self::sqrt(balance) } else { balance };
-            total_power += power;
+            total_power = total_power.checked_add(power).expect("Power overflow");
             
             env.storage().persistent().set(&DataKey::Vote(proposal_id, voter.clone()), &VoteRecord {
                 voter: voter.clone(),
@@ -148,7 +148,7 @@ impl GovernanceContract {
             let balance = token_client.balance(&delegator);
             let power = if use_quadratic { Self::sqrt(balance) } else { balance };
             
-            total_power += power;
+            total_power = total_power.checked_add(power).expect("Power overflow");
 
             env.storage().persistent().set(&DataKey::Vote(proposal_id, delegator.clone()), &VoteRecord {
                 voter: voter.clone(),
@@ -159,9 +159,9 @@ impl GovernanceContract {
         }
 
         if support {
-            proposal.total_votes_for += total_power;
+            proposal.total_votes_for = proposal.total_votes_for.checked_add(total_power).expect("Votes overflow");
         } else {
-            proposal.total_votes_against += total_power;
+            proposal.total_votes_against = proposal.total_votes_against.checked_add(total_power).expect("Votes overflow");
         }
 
         env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
@@ -198,14 +198,15 @@ impl GovernanceContract {
         let settings: CategorySettings = env.storage().instance().get(&DataKey::CategorySettings(category_id))
             .expect("Settings not found");
 
-        let total_votes = proposal.total_votes_for + proposal.total_votes_against;
-
+        let total_votes = proposal.total_votes_for.checked_add(proposal.total_votes_against).expect("Votes overflow");
         if total_votes >= settings.quorum {
-            let for_percentage = if total_votes > 0 { (proposal.total_votes_for * 100) / total_votes } else { 0 };
+            let for_percentage = if total_votes > 0 { 
+                (proposal.total_votes_for.checked_mul(100).expect("Arithmetic error")).checked_div(total_votes).expect("Arithmetic error")
+            } else { 0 };
             if for_percentage >= settings.threshold as i128 {
                 proposal.status = ProposalStatus::Queued;
                 let timelock: u64 = env.storage().instance().get(&DataKey::TimelockDuration).unwrap();
-                proposal.eta = env.ledger().timestamp() + timelock;
+                proposal.eta = env.ledger().timestamp().checked_add(timelock).expect("Time overflow");
             } else {
                 proposal.status = ProposalStatus::Defeated;
             }

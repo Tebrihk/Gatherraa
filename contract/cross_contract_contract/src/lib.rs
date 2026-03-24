@@ -494,7 +494,8 @@ impl CrossContractContract {
             .ok_or(CrossContractError::OperationNotFound)?;
 
         // Check timeout
-        if e.ledger().timestamp() > atomic_op.created_at + atomic_op.timeout {
+        let deadline = atomic_op.created_at.checked_add(atomic_op.timeout).expect("Timestamp overflow");
+        if e.ledger().timestamp() > deadline {
             atomic_op.status = OperationStatus::Failed;
             e.storage().instance().set(&DataKey::AtomicOperation(operation_id.clone()), &atomic_op);
             return Err(CrossContractError::OperationTimeout);

@@ -100,6 +100,52 @@ impl SoulboundTicketContract {
 
     /// ==================== VRF & LOTTERY FUNCTIONS ====================
 
+    /// Set the public key for verifying off-chain VRF proofs
+    pub fn set_vrf_public_key(e: &Env, public_key: BytesN<32>) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        e.storage().instance().set(&DataKey::VRFPublicKey, &public_key);
+    }
+
+    /// Add an authorized entropy provider
+    pub fn add_entropy_provider(e: &Env, provider: Address) {
+        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        e.storage().instance().set(&DataKey::EntropyProvider(provider), &true);
+    }
+
+    /// Submit an entropy seed for a specific tier
+    pub fn submit_entropy_seed(e: &Env, provider: Address, tier_symbol: Symbol, seed: Bytes) {
+        provider.require_auth();
+        
+        if !e.storage().instance().has(&DataKey::EntropyProvider(provider.clone())) {
+            panic!("Not an authorized entropy provider");
+        }
+
+        e.storage().persistent().set(&DataKey::EntropySeed(provider.clone(), tier_symbol.clone()), &seed);
+        
+        let mut providers: Vec<Address> = e.storage().persistent().get(&DataKey::EntropyProviders(tier_symbol.clone())).unwrap_or(Vec::new(e));
+        if !providers.contains(&provider) {
+            providers.push_back(provider).unwrap();
+            e.storage().persistent().set(&DataKey::EntropyProviders(tier_symbol), &providers);
+        }
+    }
+
+    /// Submit an Ed25519 VRF proof (signature) for a tier
+    pub fn submit_vrf_proof(e: &Env, tier_symbol: Symbol, seed: Bytes, signature: BytesN<64>) {
+        // VRF proofs are typically submitted by a trusted off-chain node (e.g., Chainlink-like)
+        // No specific auth here yet, but it must verify against the registered VRF public key.
+        let public_key: BytesN<32> = e.storage().instance().get(&DataKey::VRFPublicKey).unwrap_or_else(|| panic!("VRF public key not set"));
+        
+        if VRFEngine::verify_signature_vrf(e, &public_key, &seed, &signature) {
+            // We store the signature as the proof of randomness. 
+            // The actual entropy used will be the hash of this signature.
+            e.storage().persistent().set(&DataKey::VRFProof(tier_symbol), &signature);
+        } else {
+            panic!("Invalid VRF proof: verification failed against registered public key");
+        }
+    }
+
     /// Initialize VRF lottery system for a tier
     /// Sets up commitment scheme and allocation strategy
     pub fn initialize_lottery(
@@ -233,11 +279,34 @@ impl SoulboundTicketContract {
             panic!("Cannot finalize before finalization ledger");
         }
 
-        // Generate entropy
-        let entropy = EntropyManager::generate_multi_source_entropy(e, 0);
+        // Collect entropy from all sources
+        let mut entropy_sources = Vec::new(e);
+        
+        // 1. Multi-provider seeds
+        let providers: Vec<Address> = e.storage().persistent().get(&DataKey::EntropyProviders(tier_symbol.clone())).unwrap_or(Vec::new(e));
+        for provider in providers {
+            if let Some(seed) = e.storage().persistent().get::<_, Bytes>(&DataKey::EntropySeed(provider, tier_symbol.clone())) {
+                entropy_sources.push_back(seed).unwrap();
+            }
+        }
 
-        // Generate batch randomness
-        let randomness_outputs = VRFEngine::generate_batch_randomness(e, batch_size, entropy);
+        // 2. VRF Proof (if exists, mix it in)
+        if let Some(proof) = e.storage().persistent().get::<_, BytesN<64>>(&DataKey::VRFProof(tier_symbol.clone())) {
+            let mut proof_bytes = Vec::new(e);
+            proof_bytes.extend_from_array(&proof.to_array()).unwrap();
+            entropy_sources.push_back(Bytes::from_vec(&proof_bytes)).unwrap();
+        }
+
+        // Mix all sources to get the final master entropy
+        let mixed_entropy = VRFEngine::mix_entropy_sources(e, entropy_sources);
+
+        // Generate batch randomness using the mixed entropy
+        let randomness_outputs = VRFEngine::generate_batch_randomness(e, batch_size, mixed_entropy);
+
+        // Validate randomness quality
+        if !VRFEngine::validate_randomness_quality(e, &randomness_outputs) {
+            panic!("Generated randomness failed quality validation");
+        }
 
         // Store randomness hash for verification
         let randomness_hash = VRFEngine::hash_randomness_batch(e, &randomness_outputs);
@@ -459,8 +528,9 @@ impl SoulboundTicketContract {
             PricingStrategy::Standard => {
                 // Demand based: base_price * (1 + (minted / (max_supply / 5)) * 5%)
                 let thresholds_passed = tier.minted / (tier.max_supply.max(1) / 5).max(1);
-                let increase = price * PRICE_INCREASE_BPS * (thresholds_passed as i128) / 10000;
-                price += increase;
+                let multiplier = (thresholds_passed as i128).checked_mul(PRICE_INCREASE_BPS).expect("Arithmetic overflow");
+                let increase = price.checked_mul(multiplier).and_then(|v| v.checked_div(10000)).expect("Arithmetic overflow");
+                price = price.checked_add(increase).expect("Arithmetic overflow");
             }
             PricingStrategy::TimeDecay => {
                 let event_info: EventInfo =
@@ -470,25 +540,27 @@ impl SoulboundTicketContract {
                 // Assume linear scale from start to event_start_time
                 let start = event_info.start_time.saturating_sub(604800); // 1 week before
                 if now < start {
-                    price -= price * EARLY_BIRD_DISCOUNT_BPS / 10000;
+                    let discount = price.checked_mul(EARLY_BIRD_DISCOUNT_BPS).and_then(|v| v.checked_div(10000)).expect("Arithmetic overflow");
+                    price = price.checked_sub(discount).expect("Arithmetic overflow");
                 }
             }
             PricingStrategy::AbTestA => {
                 // High demand sensitivity (10% increase per threshold)
                 let thresholds_passed = tier.minted / (tier.max_supply.max(1) / 5).max(1);
-                let increase =
-                    price * (PRICE_INCREASE_BPS * 2) * (thresholds_passed as i128) / 10000;
-                price += increase;
+                let multiplier = (thresholds_passed as i128).checked_mul(PRICE_INCREASE_BPS * 2).expect("Arithmetic overflow");
+                let increase = price.checked_mul(multiplier).and_then(|v| v.checked_div(10000)).expect("Arithmetic overflow");
+                price = price.checked_add(increase).expect("Arithmetic overflow");
             }
             PricingStrategy::AbTestB => {
                 // Floor starts higher (+20%)
-                price += price * 2000 / 10000;
+                let uplift = price.checked_mul(2000).and_then(|v| v.checked_div(10000)).expect("Arithmetic overflow");
+                price = price.checked_add(uplift).expect("Arithmetic overflow");
             }
         }
 
         // Apply external Oracle factors using the real DIA oracle integration
         let oracle_multiplier = Self::fetch_oracle_multiplier(e, &config);
-        price = price * oracle_multiplier / ORACLE_PRECISION;
+        price = price.checked_mul(oracle_multiplier).and_then(|v| v.checked_div(ORACLE_PRECISION)).expect("Arithmetic overflow");
 
         // Apply bounds
         price = price.max(config.price_floor).min(config.price_ceiling);
@@ -520,7 +592,7 @@ impl SoulboundTicketContract {
                 .instance()
                 .get(&DataKey::TokenIdCounter)
                 .unwrap();
-            counter += 1;
+            counter = counter.checked_add(1).expect("Counter overflow");
             let token_id = counter;
             e.storage()
                 .instance()
@@ -539,7 +611,7 @@ impl SoulboundTicketContract {
                 .set(&DataKey::Ticket(token_id), &ticket);
         }
 
-        tier.minted += amount;
+        tier.minted = tier.minted.checked_add(amount).expect("Supply overflow");
         e.storage().persistent().set(&key, &tier);
     }
 
@@ -574,7 +646,7 @@ impl SoulboundTicketContract {
             .instance()
             .get(&DataKey::TokenIdCounter)
             .unwrap();
-        counter += 1;
+        counter = counter.checked_add(1).expect("Counter overflow");
         let token_id = counter;
         e.storage()
             .instance()
@@ -592,7 +664,7 @@ impl SoulboundTicketContract {
             .persistent()
             .set(&DataKey::Ticket(token_id), &ticket);
 
-        tier.minted += 1;
+        tier.minted = tier.minted.checked_add(1).expect("Supply overflow");
         tier.current_price = price; // Update the current recorded price for this tier
         e.storage().persistent().set(&key, &tier);
 

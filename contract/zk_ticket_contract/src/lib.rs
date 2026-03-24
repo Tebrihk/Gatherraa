@@ -85,8 +85,8 @@ impl ZKTicketContract {
             });
 
         event_commits.commitments.push_back(commitment.clone());
-        event_commits.total_tickets += 1;
-        event_commits.active_tickets += 1;
+        event_commits.total_tickets = event_commits.total_tickets.checked_add(1).expect("Total tickets overflow");
+        event_commits.active_tickets = event_commits.active_tickets.checked_add(1).expect("Active tickets overflow");
         e.storage().persistent().set(&event_key, &event_commits);
 
         // Store nullifier info
@@ -267,7 +267,7 @@ impl ZKTicketContract {
             mobile_device_id: mobile_device_id.clone(),
             proof_template: proof_template.clone(),
             last_used: e.ledger().timestamp(),
-            usage_count: 1,
+            usage_count: (mobile_data.usage_count).checked_add(1).expect("Usage count overflow"),
         };
 
         // Store mobile data (could be persistent or temporary)
@@ -533,8 +533,8 @@ impl ZKTicketContract {
         // Check verification cache
         let cache_key = Self::generate_cache_key(e, proof_id);
         if let Some(cached) = e.storage().instance().get(&DataKey::VerificationCache) {
-            if cached.cache_key == cache_key && 
-               e.ledger().timestamp() - cached.timestamp < 300 { // 5 minute cache
+            let elapsed = e.ledger().timestamp().checked_sub(cached.timestamp).expect("Time error");
+            if cached.cache_key == cache_key && elapsed < 300 { // 5 minute cache
                 return cached.result;
             }
         }
