@@ -26,18 +26,36 @@ impl EventFactoryContract {
             .set(&DataKey::EventWasmHash, &event_wasm_hash);
         e.storage().instance().set(&DataKey::Paused, &false);
         e.storage().instance().set(&DataKey::Version, &1u32);
+
+        // Emit event
+        e.events().publish(
+            (Symbol::new(&e, "initialized"), admin),
+            event_wasm_hash,
+        );
     }
 
     pub fn pause(e: Env) {
         let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
         e.storage().instance().set(&DataKey::Paused, &true);
+
+        // Emit event
+        e.events().publish(
+            (Symbol::new(&e, "paused"), admin),
+            (),
+        );
     }
 
     pub fn unpause(e: Env) {
         let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
         e.storage().instance().set(&DataKey::Paused, &false);
+
+        // Emit event
+        e.events().publish(
+            (Symbol::new(&e, "unpaused"), admin),
+            (),
+        );
     }
 
     pub fn update_wasm_hash(e: Env, new_wasm_hash: BytesN<32>) {
@@ -46,6 +64,12 @@ impl EventFactoryContract {
         e.storage()
             .instance()
             .set(&DataKey::EventWasmHash, &new_wasm_hash);
+
+        // Emit event
+        e.events().publish(
+            (Symbol::new(&e, "wasm_hash_updated"), admin),
+            new_wasm_hash,
+        );
     }
 
     pub fn create_event(

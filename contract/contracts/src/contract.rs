@@ -31,15 +31,21 @@ impl StakingContract {
         Self::validate_contract_address(&env, &reward_token);
 
         let config = Config {
-            admin,
-            staking_token,
-            reward_token,
+            admin: admin.clone(),
+            staking_token: staking_token.clone(),
+            reward_token: reward_token.clone(),
             reward_rate,
         };
         write_config(&env, &config);
         write_last_update_time(&env, env.ledger().timestamp());
         env.storage().instance().set(&DataKey::Version, &1u32);
         extend_instance(&env);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "initialized"), admin),
+            (staking_token, reward_token, reward_rate),
+        );
     }
 
     pub fn set_tier(env: Env, tier_id: u32, min_amount: i128, reward_multiplier: u32) {
@@ -52,6 +58,12 @@ impl StakingContract {
         };
         write_tier(&env, tier_id, &tier);
         extend_instance(&env);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "tier_set"), tier_id),
+            (min_amount, reward_multiplier),
+        );
     }
 
     pub fn stake(env: Env, user: Address, amount: i128, lock_duration: u64, tier_id: u32) {
@@ -126,12 +138,16 @@ impl StakingContract {
 
         write_user_info(&env, &user, &user_info);
 
-        let mut total_shares = read_total_shares(&env);
-        total_shares += diff_shares;
         write_total_shares(&env, total_shares);
 
         env.storage().instance().remove(&REENTRANCY_GUARD);
         extend_instance(&env);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "staked"), user),
+            (amount, lock_duration, tier_id),
+        );
     }
 
     pub fn claim(env: Env, user: Address, compound: bool) {
@@ -196,6 +212,12 @@ impl StakingContract {
 
         env.storage().instance().remove(&REENTRANCY_GUARD);
         extend_instance(&env);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "claimed"), user),
+            (reward, if compound { 1u32 } else { 0u32 }),
+        );
     }
 
     pub fn unstake(env: Env, user: Address, amount: i128) {
@@ -276,6 +298,12 @@ impl StakingContract {
 
         env.storage().instance().remove(&REENTRANCY_GUARD);
         extend_instance(&env);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "unstaked"), user),
+            (amount, actual_amount),
+        );
     }
 
     pub fn slash(env: Env, user: Address, amount: i128) {
@@ -318,6 +346,12 @@ impl StakingContract {
 
         // Slashed tokens stay in contract or could be burned.
         extend_instance(&env);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "slashed"), user),
+            amount,
+        );
     }
 
     pub fn emergency_withdraw(env: Env, user: Address) {
@@ -353,6 +387,12 @@ impl StakingContract {
 
         token_client.transfer(&env.current_contract_address(), &user, &actual_amount);
         extend_instance(&env);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "emergency_withdrawn"), user),
+            (amount, actual_amount),
+        );
     }
 
     // --- UPGRADEABILITY MECHANISMS ---
