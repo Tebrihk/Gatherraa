@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { AuditLog } from '../entities/audit-log.entity';
 
 @Injectable()
