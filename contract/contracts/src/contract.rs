@@ -1,7 +1,13 @@
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol};
 
 use crate::storage::{StorageCache, *};
 use crate::types::{Config, DataKey, Tier, UserInfo};
+use gathera_common::{
+    validate_address, validate_token_address,
+    set_reentrancy_guard, remove_reentrancy_guard,
+    require_admin, has_role, write_role, remove_role, read_version,
+    schedule_upgrade, execute_upgrade
+};
 
 #[contract]
 pub struct StakingContract;
@@ -9,9 +15,6 @@ pub struct StakingContract;
 const PRECISION: i128 = 1_000_000_000;
 const ADMIN_ROLE: Symbol = symbol_short!("ADMIN");
 const MOD_ROLE: Symbol = symbol_short!("MOD");
-
-/// Reentrancy guard key
-const REENTRANCY_GUARD: Symbol = symbol_short!("reentrant");
 
 #[contractimpl]
 impl StakingContract {
@@ -28,9 +31,9 @@ impl StakingContract {
         }
 
         // Validate addresses
-        Self::validate_address(&env, &admin);
-        Self::validate_contract_address(&env, &staking_token);
-        Self::validate_contract_address(&env, &reward_token);
+        validate_address(&env, &admin);
+        validate_token_address(&env, &staking_token);
+        validate_token_address(&env, &reward_token);
 
         let config = Config {
             admin: admin.clone(),
@@ -76,14 +79,11 @@ impl StakingContract {
 
     pub fn stake(env: Env, user: Address, amount: i128, lock_duration: u64, tier_id: u32) {
         // Reentrancy protection
-        if env.storage().instance().has(&REENTRANCY_GUARD) {
-            panic!("reentrant call detected");
-        }
-        env.storage().instance().set(&REENTRANCY_GUARD, &true);
+        set_reentrancy_guard(&env);
 
         user.require_auth();
         if amount <= 0 {
-            env.storage().instance().remove(&REENTRANCY_GUARD);
+            remove_reentrancy_guard(&env);
             panic!("amount must be > 0");
         }
 
@@ -108,7 +108,7 @@ impl StakingContract {
                 env.events().publish((symbol_short!("stake_transfer_success"),), amount);
             },
             _ => {
-                env.storage().instance().remove(&REENTRANCY_GUARD);
+                remove_reentrancy_guard(&env);
                 env.events().publish((symbol_short!("stake_transfer_failed"),), amount);
                 panic!("token transfer failed");
             }
@@ -129,7 +129,7 @@ impl StakingContract {
 
         // Verify tier (using cached tier)
         if user_info.amount < tier.min_amount {
-            env.storage().instance().remove(&REENTRANCY_GUARD);
+            remove_reentrancy_guard(&env);
             panic!("insufficient amount for tier");
         }
 
@@ -155,7 +155,7 @@ impl StakingContract {
         cache.set_total_shares(total_shares);
         write_total_shares(&env, total_shares);
 
-        env.storage().instance().remove(&REENTRANCY_GUARD);
+        remove_reentrancy_guard(&env);
         extend_instance(&env);
 
         // Emit event
@@ -167,10 +167,7 @@ impl StakingContract {
 
     pub fn claim(env: Env, user: Address, compound: bool) {
         // Reentrancy protection
-        if env.storage().instance().has(&REENTRANCY_GUARD) {
-            panic!("reentrant call detected");
-        }
-        env.storage().instance().set(&REENTRANCY_GUARD, &true);
+        set_reentrancy_guard(&env);
 
         user.require_auth();
         update_reward(&env, Some(&user));
@@ -192,7 +189,7 @@ impl StakingContract {
                 // To compound, we would stake the reward. But reward token and staking token might differ.
                 // Assuming they are the same for compounding to work seamlessly, or they trade them if we had a dex.
                 if config.staking_token != config.reward_token {
-                    env.storage().instance().remove(&REENTRANCY_GUARD);
+                    remove_reentrancy_guard(&env);
                     panic!("cannot compound: reward token differs from staking token");
                 }
 
@@ -221,7 +218,7 @@ impl StakingContract {
                         env.events().publish((symbol_short!("claim_transfer_success"),), reward);
                     },
                     _ => {
-                        env.storage().instance().remove(&REENTRANCY_GUARD);
+                        remove_reentrancy_guard(&env);
                         env.events().publish((symbol_short!("claim_transfer_failed"),), reward);
                         panic!("reward transfer failed");
                     }
@@ -229,7 +226,7 @@ impl StakingContract {
             }
         }
 
-        env.storage().instance().remove(&REENTRANCY_GUARD);
+        remove_reentrancy_guard(&env);
         extend_instance(&env);
 
         // Emit event
@@ -241,14 +238,11 @@ impl StakingContract {
 
     pub fn unstake(env: Env, user: Address, amount: i128) {
         // Reentrancy protection
-        if env.storage().instance().has(&REENTRANCY_GUARD) {
-            panic!("reentrant call detected");
-        }
-        env.storage().instance().set(&REENTRANCY_GUARD, &true);
+        set_reentrancy_guard(&env);
 
         user.require_auth();
         if amount <= 0 {
-            env.storage().instance().remove(&REENTRANCY_GUARD);
+            remove_reentrancy_guard(&env);
             panic!("amount must be > 0");
         }
 
@@ -260,7 +254,7 @@ impl StakingContract {
 
         let mut user_info = read_user_info(&env, &user).expect("user not found");
         if user_info.amount < amount {
-            env.storage().instance().remove(&REENTRANCY_GUARD);
+            remove_reentrancy_guard(&env);
             panic!("insufficient balance");
         }
 
@@ -310,13 +304,13 @@ impl StakingContract {
                 env.events().publish((symbol_short!("unstake_transfer_success"),), actual_amount);
             },
             _ => {
-                env.storage().instance().remove(&REENTRANCY_GUARD);
+                remove_reentrancy_guard(&env);
                 env.events().publish((symbol_short!("unstake_transfer_failed"),), actual_amount);
                 panic!("unstake transfer failed");
             }
         }
 
-        env.storage().instance().remove(&REENTRANCY_GUARD);
+        remove_reentrancy_guard(&env);
         extend_instance(&env);
 
         // Emit event
@@ -421,72 +415,24 @@ impl StakingContract {
         );
     }
 
-    // --- UPGRADEABILITY MECHANISMS ---
     // Schedule an upgrade with a timelock (e.g., 24 hours).
     pub fn schedule_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, unlock_time: u64) {
         admin.require_auth();
-        if !has_role(&env, ADMIN_ROLE, admin) {
-            panic!("not authorized");
-        }
-
-        if env.ledger().timestamp() >= unlock_time {
-            panic!("unlock_time must be in the future");
-        }
-
-        env.storage().instance().set(
-            &DataKey::UpgradeTimelock,
-            &(new_wasm_hash.clone(), unlock_time),
-        );
-
-        env.events().publish(
-            (Symbol::new(&env, "UpgradeScheduled"),),
-            (new_wasm_hash, unlock_time),
-        );
-        extend_instance(&env);
+        schedule_upgrade(&env, new_wasm_hash, unlock_time);
     }
 
     // Cancel a scheduled upgrade. (Rollback mechanism before execution)
     pub fn cancel_upgrade(env: Env, admin: Address) {
         admin.require_auth();
-        if !has_role(&env, ADMIN_ROLE, admin) {
-            panic!("not authorized");
-        }
-
         env.storage().instance().remove(&DataKey::UpgradeTimelock);
         env.events()
             .publish((Symbol::new(&env, "UpgradeCancelled"),), ());
-        extend_instance(&env);
     }
 
     // Execute the scheduled upgrade.
     pub fn execute_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
         admin.require_auth();
-        if !has_role(&env, ADMIN_ROLE, admin) {
-            panic!("not authorized");
-        }
-
-        let (scheduled_hash, unlock_time): (BytesN<32>, u64) = env
-            .storage()
-            .instance()
-            .get(&DataKey::UpgradeTimelock)
-            .unwrap_or_else(|| panic!("no upgrade scheduled"));
-
-        if scheduled_hash != new_wasm_hash {
-            panic!("wasm hash does not match scheduled");
-        }
-        if env.ledger().timestamp() < unlock_time {
-            panic!("timelock not expired");
-        }
-
-        // Clear the timelock so it can't be reused
-        env.storage().instance().remove(&DataKey::UpgradeTimelock);
-
-        // Perform the upgrade
-        env.deployer()
-            .update_current_contract_wasm(new_wasm_hash.clone());
-
-        env.events()
-            .publish((Symbol::new(&env, "Upgraded"),), new_wasm_hash);
+        execute_upgrade(&env, new_wasm_hash);
     }
 
     // Execute a state migration after an upgrade.
@@ -514,12 +460,10 @@ impl StakingContract {
         extend_instance(&env);
     }
 
-    // Get current contract version
     pub fn version(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::Version).unwrap_or(1)
+        read_version(&env)
     }
 
-    // Role Management
     pub fn grant_role(env: Env, admin: Address, role: Symbol, address: Address) {
         admin.require_auth();
         if !has_role(&env, ADMIN_ROLE, admin) {
@@ -575,21 +519,4 @@ fn update_reward(env: &Env, user: Option<&Address>) {
         user_info.reward_per_token_paid = rpt_stored;
         write_user_info(env, u, &user_info);
     }
-}
-
-/// Validates that an address is not zero
-fn validate_address(env: &Env, address: &Address) {
-    // Check if address is zero
-    if address == &Address::from_contract_id(&BytesN::from_array(env, &[0; 32])) {
-        panic!("zero address not allowed");
-    }
-}
-
-/// Validates that an address points to a deployed token contract
-fn validate_contract_address(env: &Env, address: &Address) {
-    validate_address(env, address);
-    // Try to call a token interface method to verify it's a token contract
-    let token_client = token::Client::new(env, address);
-    // This will fail if not a valid token contract
-    let _ = token_client.decimals();
 }

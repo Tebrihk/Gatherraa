@@ -11,12 +11,15 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, vec, map, Address, BytesN, Env, IntoVal, String, Symbol, Vec, Map, U256,
 };
 
+use gathera_common::{
+    require_admin, is_paused, set_paused, read_version, write_version
+};
+
 #[contract]
 pub struct DutchAuctionContract;
 
 #[contractimpl]
 impl DutchAuctionContract {
-    // Initialize the contract
     pub fn initialize(e: Env, admin: Address, config: AuctionConfig) {
         if e.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
@@ -32,7 +35,6 @@ impl DutchAuctionContract {
         e.storage().instance().set(&DataKey::ActiveAuctions, &Vec::new(&e));
     }
 
-    // Create a new auction
     pub fn create_auction(
         e: Env,
         organizer: Address,
@@ -48,8 +50,7 @@ impl DutchAuctionContract {
         anti_bot_enabled: Option<bool>,
         min_bid_increment: Option<i128>,
     ) -> BytesN<32> {
-        let paused: bool = e.storage().instance().get(&DataKey::Paused).unwrap();
-        if paused {
+        if is_paused(&e) {
             panic!("contract is paused");
         }
 
@@ -340,15 +341,13 @@ impl DutchAuctionContract {
 
     // Admin functions
     pub fn pause(e: Env) {
-        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        e.storage().instance().set(&DataKey::Paused, &true);
+        require_admin(&e);
+        set_paused(&e, true);
     }
 
     pub fn unpause(e: Env) {
-        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        e.storage().instance().set(&DataKey::Paused, &false);
+        require_admin(&e);
+        set_paused(&e, false);
     }
 
     pub fn update_config(e: Env, new_config: AuctionConfig) {
@@ -383,7 +382,7 @@ impl DutchAuctionContract {
     }
 
     pub fn version(e: Env) -> u32 {
-        e.storage().instance().get(&DataKey::Version).unwrap_or(1)
+        read_version(&e)
     }
 
     // Helper functions

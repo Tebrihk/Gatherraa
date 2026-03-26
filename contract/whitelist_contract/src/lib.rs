@@ -1,5 +1,5 @@
-#![no_std]
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec, IntoVal, xdr::ToXdr, Bytes};
+use gathera_common::{validate_address, validate_token_address};
 
 mod merkle;
 mod storage;
@@ -31,6 +31,8 @@ impl WhitelistContract {
         total_amount: i128,
     ) -> u32 {
         admin.require_auth();
+        validate_address(&env, &admin);
+        validate_token_address(&env, &token);
         
         let mut count: u32 = env.storage().instance().get(&DataKey::CampaignCount).unwrap_or(0);
         count = count.checked_add(1).expect("Campaign count overflow");

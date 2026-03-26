@@ -14,22 +14,24 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, vec, map, Address, BytesN, Env, IntoVal, String, Symbol, Vec, Map, U256,
 };
 
+use gathera_common::{
+    validate_address, validate_token_address,
+    set_reentrancy_guard, remove_reentrancy_guard,
+    require_admin, is_paused, set_paused, read_version, write_version
+};
+
 #[contract]
 pub struct EscrowContract;
 
-/// Reentrancy guard key
-const REENTRANCY_GUARD: Symbol = symbol_short!("reentrant");
-
 #[contractimpl]
 impl EscrowContract {
-    // Initialize the contract
     pub fn initialize(e: Env, admin: Address, config: RevenueSplitConfig) {
         if e.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
 
         // Validate admin address
-        Self::validate_address(&e, &admin);
+        validate_address(&e, &admin);
 
         // Validate configuration
         Self::validate_config(&config);
@@ -59,12 +61,12 @@ impl EscrowContract {
         }
 
         // Validate all addresses
-        Self::validate_address(&e, &event);
-        Self::validate_address(&e, &organizer);
-        Self::validate_address(&e, &purchaser);
-        Self::validate_contract_address(&e, &token);
+        validate_address(&e, &event);
+        validate_address(&e, &organizer);
+        validate_address(&e, &purchaser);
+        validate_token_address(&e, &token);
         if let Some(ref ref_addr) = referral {
-            Self::validate_address(&e, ref_addr);
+            validate_address(&e, ref_addr);
         }
 
         // Validate amount against config
@@ -136,16 +138,13 @@ impl EscrowContract {
     // Lock escrow (transfer funds to contract)
     pub fn lock_escrow(e: Env, escrow_id: BytesN<32>) {
         // Reentrancy protection
-        if e.storage().instance().has(&REENTRANCY_GUARD) {
-            panic!("reentrant call detected");
-        }
-        e.storage().instance().set(&REENTRANCY_GUARD, &true);
+        set_reentrancy_guard(&e);
 
         let mut escrow: Escrow = e.storage().instance().get(&DataKey::Escrow(escrow_id.clone()))
             .unwrap_or_else(|| panic!("escrow not found"));
 
         if escrow.status != EscrowStatus::Pending {
-            e.storage().instance().remove(&REENTRANCY_GUARD);
+            remove_reentrancy_guard(&e);
             panic!("invalid status");
         }
 
@@ -170,7 +169,7 @@ impl EscrowContract {
         escrow.status = EscrowStatus::Locked;
         e.storage().instance().set(&DataKey::Escrow(escrow_id.clone()), &escrow);
 
-        e.storage().instance().remove(&REENTRANCY_GUARD);
+        remove_reentrancy_guard(&e);
 
         #[allow(deprecated)]
         e.events().publish(
@@ -465,15 +464,13 @@ impl EscrowContract {
 
     // Admin functions
     pub fn pause(e: Env) {
-        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        e.storage().instance().set(&DataKey::Paused, &true);
+        require_admin(&e);
+        set_paused(&e, true);
     }
 
     pub fn unpause(e: Env) {
-        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        e.storage().instance().set(&DataKey::Paused, &false);
+        require_admin(&e);
+        set_paused(&e, false);
     }
 
     pub fn update_config(e: Env, new_config: RevenueSplitConfig) {
@@ -519,7 +516,7 @@ impl EscrowContract {
     }
 
     pub fn version(e: Env) -> u32 {
-        e.storage().instance().get(&DataKey::Version).unwrap_or(1)
+        read_version(&e)
     }
 
     // Helper functions
@@ -531,24 +528,6 @@ impl EscrowContract {
         data.push_back(e.ledger().timestamp().to_val());
         
         e.crypto().sha256(&data.to_bytes())
-    }
-
-    /// Validates that an address is not zero and is a valid account or contract
-    fn validate_address(e: &Env, address: &Address) {
-        // Check if address is zero
-        if address == &Address::from_contract_id(&BytesN::from_array(e, &[0; 32])) {
-            panic!("zero address not allowed");
-        }
-        // Additional validation can be added here if needed
-    }
-
-    /// Validates that an address points to a deployed token contract
-    fn validate_contract_address(e: &Env, address: &Address) {
-        Self::validate_address(e, address);
-        // Try to call a token interface method to verify it's a token contract
-        let token_client = soroban_sdk::token::Client::new(e, address);
-        // This will fail if not a valid token contract
-        let _ = token_client.decimals();
     }
 
     fn validate_config(config: &RevenueSplitConfig) {

@@ -10,6 +10,9 @@ use storage_types::{DataKey, WalletConfig, Signer, Role, Transaction, Transactio
 use soroban_sdk::{
     contract, contractimpl, symbol_short, vec, map, Address, BytesN, Env, IntoVal, String, Symbol, Vec, Map, U256,
 };
+use gathera_common::{
+    require_admin, is_paused, set_paused, read_version, write_version
+};
 
 #[contract]
 pub struct MultisigWalletContract;
@@ -100,8 +103,7 @@ impl MultisigWalletContract {
         proposer: Address,
         nonce: u64,
     ) -> BytesN<32> {
-        let paused: bool = e.storage().instance().get(&DataKey::Paused).unwrap();
-        if paused {
+        if is_paused(&e) {
             panic!("contract is paused");
         }
 
@@ -268,8 +270,7 @@ impl MultisigWalletContract {
         proposer: Address,
         nonce: u64,
     ) -> BytesN<32> {
-        let paused: bool = e.storage().instance().get(&DataKey::Paused).unwrap();
-        if paused {
+        if is_paused(&e) {
             panic!("contract is paused");
         }
 
@@ -477,15 +478,13 @@ impl MultisigWalletContract {
 
     // Admin functions
     pub fn pause(e: Env) {
-        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        e.storage().instance().set(&DataKey::Paused, &true);
+        require_admin(&e);
+        set_paused(&e, true);
     }
 
     pub fn unpause(e: Env) {
-        let admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        e.storage().instance().set(&DataKey::Paused, &false);
+        require_admin(&e);
+        set_paused(&e, false);
     }
 
     pub fn update_config(e: Env, new_config: WalletConfig) {
@@ -529,7 +528,7 @@ impl MultisigWalletContract {
     }
 
     pub fn version(e: Env) -> u32 {
-        e.storage().instance().get(&DataKey::Version).unwrap_or(1)
+        read_version(&e)
     }
 
     // Helper functions
