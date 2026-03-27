@@ -286,3 +286,67 @@ fn test_pause_unpause() {
     // Unpause contract
     VRFContract::unpause(env.clone());
 }
+
+// ─── Direct unit tests for the statistical quality helpers ──────────────────
+
+#[test]
+fn test_monobit_alternating_passes() {
+    // Alternating 10101010... = perfectly balanced bits -> monobit should pass.
+    let env = Env::default();
+    let data = [0xAA_u8; 32]; // 10101010 repeated
+    let randomness = BytesN::from_array(&env, &data);
+    let result = VRFContract::monobit_test(&randomness);
+    assert!(result.passed, "Alternating bits should pass monobit test");
+    assert!(result.score >= 0.0);
+}
+
+#[test]
+fn test_monobit_all_zeros_fails() {
+    // All zeros -> no ones at all -> should fail monobit.
+    let env = Env::default();
+    let data = [0x00_u8; 32];
+    let randomness = BytesN::from_array(&env, &data);
+    let result = VRFContract::monobit_test(&randomness);
+    assert!(!result.passed, "All-zero bits should fail monobit test");
+}
+
+#[test]
+fn test_runs_alternating_passes() {
+    // Alternating bits produce the expected number of runs -> should pass.
+    let env = Env::default();
+    let data = [0xAA_u8; 32];
+    let randomness = BytesN::from_array(&env, &data);
+    let result = VRFContract::runs_test(&randomness);
+    assert!(result.passed, "Alternating bits should pass runs test");
+}
+
+#[test]
+fn test_runs_all_ones_fails() {
+    // All ones -> exactly 1 run -> should fail runs test.
+    let env = Env::default();
+    let data = [0xFF_u8; 32];
+    let randomness = BytesN::from_array(&env, &data);
+    let result = VRFContract::runs_test(&randomness);
+    assert!(!result.passed, "All-ones bits should fail runs test");
+}
+
+#[test]
+fn test_longest_run_alternating_passes() {
+    // Alternating bits -> longest run of ones is 1 -> well within the 26-bit limit.
+    let env = Env::default();
+    let data = [0xAA_u8; 32];
+    let randomness = BytesN::from_array(&env, &data);
+    let result = VRFContract::longest_run_test(&randomness);
+    assert!(result.passed, "Alternating bits should pass longest-run test");
+    assert_eq!(result.score, 1.0);
+}
+
+#[test]
+fn test_longest_run_all_ones_fails() {
+    // All ones -> longest run of 256 bits -> far exceeds limit.
+    let env = Env::default();
+    let data = [0xFF_u8; 32];
+    let randomness = BytesN::from_array(&env, &data);
+    let result = VRFContract::longest_run_test(&randomness);
+    assert!(!result.passed, "All-ones bits should fail longest-run test");
+}

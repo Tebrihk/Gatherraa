@@ -494,3 +494,134 @@ fn test_update_plan() {
     assert_eq!(plan.price, 1500);
     assert_eq!(plan.category_ids.len(), 5);
 }
+
+// ─── Tests for refactored helpers ─────────────────────────────────────────────────────
+
+#[test]
+fn test_subscribe_duplicate_blocks() {
+    // Subscribing twice while already active must panic.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token_contract(&env, &token_admin);
+    let contract = create_subscription_contract(&env);
+
+    token.mint(&user, &20000);
+    contract.initialize(&admin, &token.address, &7);
+
+    let category_ids = Vec::from_array(&env, [1u32]);
+    let plan_id = contract.create_plan(&SubscriptionTier::Monthly, &1000, &30, &category_ids, &0);
+
+    contract.subscribe(&user, &plan_id);
+
+    // Second subscribe should panic
+    let result = std::panic::catch_unwind(|| {
+        contract.subscribe(&user, &plan_id);
+    });
+    assert!(result.is_err(), "Subscribing twice should fail");
+}
+
+#[test]
+fn test_claim_gift_sets_auto_renew_false() {
+    // Gifts should create subscriptions with auto_renew = false.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let gifter = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token_contract(&env, &token_admin);
+    let contract = create_subscription_contract(&env);
+
+    token.mint(&gifter, &10000);
+    contract.initialize(&admin, &token.address, &7);
+
+    let category_ids = Vec::from_array(&env, [1u32]);
+    let plan_id = contract.create_plan(&SubscriptionTier::Monthly, &1000, &30, &category_ids, &0);
+
+    let gift_id = contract.gift_subscription(&gifter, &recipient, &plan_id);
+    let sub_id = contract.claim_gift(&recipient, &gift_id);
+
+    let sub = contract.get_subscription(&recipient).unwrap();
+    assert_eq!(sub.subscription_id, sub_id);
+    assert!(!sub.auto_renew, "Gifted subscription should have auto_renew = false");
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_check_subscription_status_expires_to_grace() {
+    // When a subscription passes end_date but not grace period end, it should become GracePeriod.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token_contract(&env, &token_admin);
+    let contract = create_subscription_contract(&env);
+
+    token.mint(&user, &10000);
+    // 7-day grace period
+    contract.initialize(&admin, &token.address, &7);
+
+    let category_ids = Vec::from_array(&env, [1u32]);
+    // 30-day plan
+    let plan_id = contract.create_plan(&SubscriptionTier::Monthly, &1000, &30, &category_ids, &0);
+    contract.subscribe(&user, &plan_id);
+
+    // Advance ledger past end_date but within grace period (35 days = 30 plan + 5 days into grace)
+    let thirty_five_days = 35u64 * 86_400;
+    env.ledger().set(LedgerInfo {
+        timestamp: env.ledger().timestamp() + thirty_five_days,
+        protocol_version: 21,
+        sequence_number: env.ledger().sequence() + 100,
+        network_id: [0u8; 32],
+        base_reserve: 10,
+        max_entry_ttl: 10000,
+        min_persistent_entry_ttl: 10000,
+        min_temp_entry_ttl: 10000,
+    });
+
+    let status = contract.check_subscription_status(&user);
+    assert_eq!(status, SubscriptionStatus::GracePeriod);
+}
+
+#[test]
+fn test_check_subscription_status_expires_fully() {
+    // Past grace period -> Expired.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token_contract(&env, &token_admin);
+    let contract = create_subscription_contract(&env);
+
+    token.mint(&user, &10000);
+    contract.initialize(&admin, &token.address, &7);
+
+    let category_ids = Vec::from_array(&env, [1u32]);
+    let plan_id = contract.create_plan(&SubscriptionTier::Monthly, &1000, &30, &category_ids, &0);
+    contract.subscribe(&user, &plan_id);
+
+    // Advance 40 days (30 plan + 7 grace + 3 extra)
+    let forty_days = 40u64 * 86_400;
+    env.ledger().set(LedgerInfo {
+        timestamp: env.ledger().timestamp() + forty_days,
+        protocol_version: 21,
+        sequence_number: env.ledger().sequence() + 100,
+        network_id: [0u8; 32],
+        base_reserve: 10,
+        max_entry_ttl: 10000,
+        min_persistent_entry_ttl: 10000,
+        min_temp_entry_ttl: 10000,
+    });
+
+    let status = contract.check_subscription_status(&user);
+    assert_eq!(status, SubscriptionStatus::Expired);
+}

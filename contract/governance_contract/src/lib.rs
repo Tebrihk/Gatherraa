@@ -179,43 +179,27 @@ impl GovernanceContract {
         let mut total_power: i128 = 0;
 
         // Voter's own power
-        if !env.storage().persistent().has(&DataKey::Vote(proposal_id, voter.clone())) {
-            let balance = token_client.balance(&voter);
-            let power = if use_quadratic { Self::sqrt(balance) } else { balance };
-            total_power = total_power.checked_add(power).expect("Power overflow");
-            
-            env.storage().persistent().set(&DataKey::Vote(proposal_id, voter.clone()), &VoteRecord {
-                voter: voter.clone(),
-                support,
-                amount: power,
-                is_quadratic: use_quadratic,
-            });
-        }
+        let own_power = Self::cast_single_vote(
+            &env, proposal_id, &voter, &voter, support, use_quadratic, &token_client,
+        );
+        total_power = total_power.checked_add(own_power).expect("Power overflow");
 
         // Delegators' power
         for delegator in delegators.iter() {
-            let delegatee: Address = env.storage().persistent().get(&DataKey::UserDelegation(delegator.clone()))
+            let delegatee: Address = env
+                .storage()
+                .persistent()
+                .get(&DataKey::UserDelegation(delegator.clone()))
                 .expect("Not a delegatee for this user");
-            
+
             if delegatee != voter {
                 panic!("Invalid delegatee for one of the delegators");
             }
 
-            if env.storage().persistent().has(&DataKey::Vote(proposal_id, delegator.clone())) {
-                continue;
-            }
-
-            let balance = token_client.balance(&delegator);
-            let power = if use_quadratic { Self::sqrt(balance) } else { balance };
-            
-            total_power = total_power.checked_add(power).expect("Power overflow");
-
-            env.storage().persistent().set(&DataKey::Vote(proposal_id, delegator.clone()), &VoteRecord {
-                voter: voter.clone(),
-                support,
-                amount: power,
-                is_quadratic: use_quadratic,
-            });
+            let delegator_power = Self::cast_single_vote(
+                &env, proposal_id, &delegator, &voter, support, use_quadratic, &token_client,
+            );
+            total_power = total_power.checked_add(delegator_power).expect("Power overflow");
         }
 
         if support {
@@ -273,24 +257,15 @@ impl GovernanceContract {
             ProposalCategory::Emergency => 3,
         };
 
-        let settings: CategorySettings = env.storage().instance().get(&DataKey::CategorySettings(category_id))
+        let settings: CategorySettings = env
+            .storage()
+            .instance()
+            .get(&DataKey::CategorySettings(category_id))
             .expect("Settings not found");
 
-        let total_votes = proposal.total_votes_for.checked_add(proposal.total_votes_against).expect("Votes overflow");
-        if total_votes >= settings.quorum {
-            let for_percentage = if total_votes > 0 { 
-                (proposal.total_votes_for.checked_mul(100).expect("Arithmetic error")).checked_div(total_votes).expect("Arithmetic error")
-            } else { 0 };
-            if for_percentage >= settings.threshold as i128 {
-                proposal.status = ProposalStatus::Queued;
-                let timelock: u64 = env.storage().instance().get(&DataKey::TimelockDuration).unwrap();
-                proposal.eta = env.ledger().timestamp().checked_add(timelock).expect("Time overflow");
-            } else {
-                proposal.status = ProposalStatus::Defeated;
-            }
-        } else {
-            proposal.status = ProposalStatus::Defeated;
-        }
+        let (new_status, eta) = Self::evaluate_proposal_outcome(&env, &proposal, &settings);
+        proposal.status = new_status;
+        proposal.eta = eta;
 
         env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
 
@@ -331,6 +306,74 @@ impl GovernanceContract {
         }
 
         env.events().publish((symbol_short!("emergen"),), action);
+    }
+
+    /// Records a single vote for `voter` on behalf of `actual_voter` (the authorised caller).
+    /// Returns the voting power added, or `0` if the address had already voted.
+    fn cast_single_vote(
+        env: &Env,
+        proposal_id: u32,
+        voter: &Address,
+        actual_voter: &Address,
+        support: bool,
+        use_quadratic: bool,
+        token_client: &token::Client,
+    ) -> i128 {
+        if env.storage().persistent().has(&DataKey::Vote(proposal_id, voter.clone())) {
+            return 0;
+        }
+        let balance = token_client.balance(voter);
+        let power = if use_quadratic { Self::sqrt(balance) } else { balance };
+        env.storage().persistent().set(
+            &DataKey::Vote(proposal_id, voter.clone()),
+            &VoteRecord {
+                voter: actual_voter.clone(),
+                support,
+                amount: power,
+                is_quadratic: use_quadratic,
+            },
+        );
+        power
+    }
+
+    /// Determines the outcome of a proposal based on quorum and approval threshold.
+    /// Returns the new `(ProposalStatus, eta)` tuple; `eta` is non-zero only when queued.
+    fn evaluate_proposal_outcome(
+        env: &Env,
+        proposal: &Proposal,
+        settings: &CategorySettings,
+    ) -> (ProposalStatus, u64) {
+        let total_votes = proposal
+            .total_votes_for
+            .checked_add(proposal.total_votes_against)
+            .expect("Votes overflow");
+
+        if total_votes < settings.quorum {
+            return (ProposalStatus::Defeated, 0);
+        }
+
+        let for_percentage = if total_votes > 0 {
+            proposal
+                .total_votes_for
+                .checked_mul(100)
+                .expect("Arithmetic error")
+                .checked_div(total_votes)
+                .expect("Arithmetic error")
+        } else {
+            0
+        };
+
+        if for_percentage >= settings.threshold as i128 {
+            let timelock: u64 = env.storage().instance().get(&DataKey::TimelockDuration).unwrap();
+            let eta = env
+                .ledger()
+                .timestamp()
+                .checked_add(timelock)
+                .expect("Time overflow");
+            (ProposalStatus::Queued, eta)
+        } else {
+            (ProposalStatus::Defeated, 0)
+        }
     }
 
     fn sqrt(n: i128) -> i128 {

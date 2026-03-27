@@ -1,5 +1,5 @@
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
-use crate::{EscrowContract, EscrowStatus, RevenueSplit, Milestone, RevenueSplitConfig, ReferralTracker};
+use crate::{EscrowContract, EscrowStatus, Escrow, RevenueSplit, Milestone, RevenueSplitConfig, ReferralTracker};
 
 #[test]
 fn test_initialize() {
@@ -346,4 +346,67 @@ fn test_dispute_creation_and_resolution() {
     let escrow = EscrowContract::get_escrow(env.clone(), escrow_id);
     assert_eq!(escrow.status, EscrowStatus::Disputed);
     assert!(!escrow.dispute_active);
+}
+
+// ─── Tests for extracted compute_revenue_splits helper ─────────────────────────────────
+
+fn make_escrow(env: &Env, amount: i128, org_pct: u32, plat_pct: u32, ref_pct: u32, precision: u32) -> Escrow {
+    let organizer = Address::generate(env);
+    let purchaser = Address::generate(env);
+    let event = Address::generate(env);
+    let token = Address::generate(env);
+    Escrow {
+        id: BytesN::from_array(env, &[0; 32]),
+        event,
+        organizer,
+        purchaser,
+        amount,
+        token,
+        created_at: 0,
+        release_time: 0,
+        status: EscrowStatus::Pending,
+        revenue_splits: RevenueSplit {
+            organizer_percentage: org_pct,
+            platform_percentage: plat_pct,
+            referral_percentage: ref_pct,
+            precision,
+        },
+        referral: None,
+        milestones: Vec::new(env),
+        dispute_active: false,
+    }
+}
+
+#[test]
+fn test_compute_revenue_splits_sums_to_amount() {
+    // All three amounts must sum exactly to the total (precision = 100).
+    let env = Env::default();
+    // 70% org, 20% plat, 10% ref, precision=100
+    let escrow = make_escrow(&env, 1000, 70, 20, 10, 100);
+    let (org, plat, referral) = EscrowContract::compute_revenue_splits(&escrow);
+    assert_eq!(org + plat + referral, escrow.amount);
+    assert_eq!(org, 700);
+    assert_eq!(plat, 200);
+    assert_eq!(referral, 100);
+}
+
+#[test]
+fn test_compute_revenue_splits_rounding_adjustment() {
+    // With amounts that don’t divide evenly, the referral slice absorbs rounding.
+    let env = Env::default();
+    // 70% org, 20% plat, 10% ref, precision=100, amount=101
+    let escrow = make_escrow(&env, 101, 70, 20, 10, 100);
+    let (org, plat, referral) = EscrowContract::compute_revenue_splits(&escrow);
+    // Total must not exceed 101
+    assert!(org + plat + referral <= escrow.amount);
+}
+
+#[test]
+fn test_compute_revenue_splits_no_referral() {
+    // When referral_percentage is 0, referral_amount is 0 and others sum correctly.
+    let env = Env::default();
+    let escrow = make_escrow(&env, 1000, 80, 20, 0, 100);
+    let (org, plat, referral) = EscrowContract::compute_revenue_splits(&escrow);
+    assert_eq!(referral, 0);
+    assert_eq!(org + plat, escrow.amount);
 }
