@@ -21,6 +21,20 @@ use soroban_sdk::{
 #[contract]
 pub struct ZKTicketContract;
 
+// ─── ZK Ticket Constants ────────────────────────────────────────────────────────────
+
+/// Minimum required byte length for a full ZK proof payload.
+/// Proofs shorter than this are rejected as malformed.
+const MIN_ZK_PROOF_DATA_LEN: u32 = 100;
+/// Minimum required byte length for a mobile-optimized ZK proof payload.
+/// Mobile proofs use a lighter format, so the threshold is lower.
+const MIN_MOBILE_PROOF_DATA_LEN: u32 = 50;
+/// TTL (in ledgers) for temporary mobile-proof storage.
+/// Corresponds to approximately 5 minutes at 1-second ledger close times.
+const MOBILE_PROOF_TTL_LEDGERS: u32 = 300;
+/// Cache validity window in seconds for verification results (5 minutes).
+const VERIFICATION_CACHE_TTL_SECONDS: u64 = 300;
+
 /// The ZK Ticket Contract enables privacy-preserving ticket verification using Zero-Knowledge Proofs.
 ///
 /// This contract allows event organizers to issue ticket commitments that users can later
@@ -308,7 +322,7 @@ impl ZKTicketContract {
         mobile_data.last_used = env.ledger().timestamp();
         mobile_data.usage_count = mobile_data.usage_count.checked_add(1).expect("Usage count overflow");
 
-        env.storage().temporary().set(&mobile_device_id, &mobile_data, 300);
+        env.storage().temporary().set(&mobile_device_id, &mobile_data, MOBILE_PROOF_TTL_LEDGERS);
 
         Ok(verification_result)
     }
@@ -532,7 +546,7 @@ impl ZKTicketContract {
         let circuit_params: CircuitParameters = e.storage().instance().get(&DataKey::CircuitParams).unwrap();
         
         // Verify proof format and structure
-        if proof_data.len() < 100 {
+        if proof_data.len() < MIN_ZK_PROOF_DATA_LEN {
             return Err(ZKTicketError::InvalidProof);
         }
 
@@ -586,7 +600,7 @@ impl ZKTicketContract {
         if let Some(cached) = env.storage().instance().get(&DataKey::VerificationCache) {
             let cache_typed: VerificationCache = cached;
             let elapsed = env.ledger().timestamp().checked_sub(cache_typed.timestamp).expect("Time error");
-            if cache_typed.cache_key == cache_key && elapsed < 300 { // 5 minute cache
+            if cache_typed.cache_key == cache_key && elapsed < VERIFICATION_CACHE_TTL_SECONDS { // 5 minute cache
                 return cache_typed.result;
             }
         }
@@ -607,7 +621,7 @@ impl ZKTicketContract {
 
     fn verify_mobile_proof_internal(e: &Env, proof_template: &Vec<u8>, proof_data: &Vec<u8>) -> Result<bool, ZKTicketError> {
         // Simplified mobile verification - optimized for mobile devices
-        if proof_data.len() < 50 {
+        if proof_data.len() < MIN_MOBILE_PROOF_DATA_LEN {
             return Err(ZKTicketError::MobileVerificationFailed);
         }
 

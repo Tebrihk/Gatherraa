@@ -24,6 +24,14 @@ use gathera_common::{
 #[contract]
 pub struct DutchAuctionContract;
 
+// ─── Dutch Auction Constants ────────────────────────────────────────────────────────
+
+/// Fixed-point precision divisor used for exponential decay calculations (1_000_000 = 100%).
+/// Decay multipliers are expressed as integers in [0, 1_000_000] where 1_000_000 means no decay.
+const DECAY_PRECISION: u64 = 1_000_000;
+/// Divisor applied before computing the decay division to prevent integer overflow.
+const DECAY_SCALE_DIVISOR: u64 = 100;
+
 #[contractimpl]
 impl DutchAuctionContract {
     pub fn initialize(env: Env, admin: Address, config: AuctionConfig) {
@@ -458,21 +466,21 @@ impl DutchAuctionContract {
         let decay_numerator = decay_factor.checked_mul(time_elapsed).expect("Arithmetic overflow");
         
         // Prevent overflow
-        if decay_numerator > 1000000 {
+        if decay_numerator > DECAY_PRECISION {
             return floor_price;
         }
 
-        let decay_div = decay_numerator.checked_div(100).expect("Arithmetic error");
-        if decay_div >= 1000000 {
+        let decay_div = decay_numerator.checked_div(DECAY_SCALE_DIVISOR).expect("Arithmetic error");
+        if decay_div >= DECAY_PRECISION {
             return floor_price;
         }
-        let decay_multiplier = 1000000 - decay_div; // Simplified decay
+        let decay_multiplier = DECAY_PRECISION - decay_div; // Simplified decay
         if decay_multiplier <= 0 {
             return floor_price;
         }
 
         let initial_floor_diff = initial_price.checked_sub(floor_price).expect("Arithmetic error");
-        let price_above_floor = initial_floor_diff.checked_mul(decay_multiplier as i128).and_then(|v| v.checked_div(1000000)).expect("Arithmetic overflow");
+        let price_above_floor = initial_floor_diff.checked_mul(decay_multiplier as i128).and_then(|v| v.checked_div(DECAY_PRECISION as i128)).expect("Arithmetic overflow");
         floor_price.checked_add(price_above_floor).expect("Arithmetic overflow")
     }
 
