@@ -1,6 +1,7 @@
 #![no_std]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
+#![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::cast_possible_truncation)]
@@ -13,7 +14,7 @@ use storage_types::{DataKey, Auction, Bid, AuctionStatus, AuctionConfig, RateLim
                    CommitReveal, DutchAuctionError};
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, map, Address, BytesN, Env, IntoVal, String, Symbol, Vec, Map, U256,
+    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, Symbol, Vec, Map,
 };
 
 use gathera_common::{
@@ -37,7 +38,7 @@ impl DutchAuctionContract {
         env.storage().instance().set(&DataKey::AuctionConfig, &config);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::Version, &1u32);
-        env.storage().instance().set(&DataKey::ActiveAuctions, &Vec::new(&e));
+        env.storage().instance().set(&DataKey::ActiveAuctions, &Vec::new(&env));
     }
 
     pub fn create_auction(
@@ -62,7 +63,7 @@ impl DutchAuctionContract {
         organizer.require_auth();
 
         // Validate auction parameters
-        Self::validate_auction_params(&e, initial_price, reserve_price, floor_price, decay_constant, duration, total_tickets)?;
+        Self::validate_auction_params(&env, initial_price, reserve_price, floor_price, decay_constant, duration, total_tickets)?;
 
         // Check concurrent auction limit
         let config: AuctionConfig = env.storage().instance().get(&DataKey::AuctionConfig).unwrap();
@@ -72,7 +73,7 @@ impl DutchAuctionContract {
         }
 
         // Generate auction ID
-        let auction_id = Self::generate_auction_id(&e, &organizer, &token, initial_price);
+        let auction_id = Self::generate_auction_id(&env, &organizer, &token, initial_price);
 
         let auction = Auction {
             id: auction_id.clone(),
@@ -91,8 +92,8 @@ impl DutchAuctionContract {
             total_tickets,
             sold_tickets: 0,
             status: AuctionStatus::Pending,
-            bids: Vec::new(&e),
-            winner_commitments: map![&e],
+            bids: Vec::new(&env),
+            winner_commitments: map![&env],
             final_extension_time: 0,
             anti_bot_enabled: anti_bot_enabled.unwrap_or(config.anti_bot_enabled),
             min_bid_increment: min_bid_increment.unwrap_or(initial_price.checked_div(100).expect("Arithmetic error")), // Default 1%
@@ -163,7 +164,7 @@ impl DutchAuctionContract {
         }
 
         // Check rate limiting
-        Self::check_rate_limit(&e, &bidder, &auction)?;
+        Self::check_rate_limit(&env, &bidder, &auction)?;
 
         // Store commitment
         auction.winner_commitments.set(bidder.clone(), commitment.clone());
@@ -180,7 +181,7 @@ impl DutchAuctionContract {
         env.storage().instance().set(&DataKey::CommitReveal(commitment.clone()), &commit_reveal);
 
         // Update rate limiter
-        Self::update_rate_limiter(&e, &bidder);
+        Self::update_rate_limiter(&env, &bidder);
 
         #[allow(deprecated)]
         env.events().publish(
@@ -212,13 +213,13 @@ impl DutchAuctionContract {
         }
 
         // Verify commitment
-        let expected_commitment = Self::calculate_commitment(&e, amount, nonce);
+        let expected_commitment = Self::calculate_commitment(&env, amount, nonce);
         if expected_commitment != commitment {
             panic!("invalid commitment");
         }
 
         // Process the revealed bid
-        Self::process_bid(&e, &mut auction, &bidder, amount)?;
+        Self::process_bid(&env, &mut auction, &bidder, amount)?;
 
         // Update commit-reveal data
         commit_reveal.revealed = true;
@@ -249,13 +250,13 @@ impl DutchAuctionContract {
         }
 
         // Check rate limiting
-        Self::check_rate_limit(&e, &bidder, &auction)?;
+        Self::check_rate_limit(&env, &bidder, &auction)?;
 
         // Process the bid
-        Self::process_bid(&e, &mut auction, &bidder, amount)?;
+        Self::process_bid(&env, &mut auction, &bidder, amount)?;
 
         // Update rate limiter
-        Self::update_rate_limiter(&e, &bidder);
+        Self::update_rate_limiter(&env, &bidder);
 
         #[allow(deprecated)]
         env.events().publish(
@@ -280,7 +281,7 @@ impl DutchAuctionContract {
         }
 
         // Process final refunds for any price differences
-        Self::process_final_refunds(&e, &mut auction);
+        Self::process_final_refunds(&env, &mut auction);
 
         auction.status = AuctionStatus::Ended;
         env.storage().instance().set(&DataKey::Auction(auction_id.clone()), &auction);
@@ -309,7 +310,7 @@ impl DutchAuctionContract {
         auction.organizer.require_auth();
 
         // Refund all bids
-        Self::refund_all_bids(&e, &mut auction);
+        Self::refund_all_bids(&env, &mut auction);
 
         auction.status = AuctionStatus::Cancelled;
         env.storage().instance().set(&DataKey::Auction(auction_id.clone()), &auction);
@@ -346,13 +347,13 @@ impl DutchAuctionContract {
 
     // Admin functions
     pub fn pause(env: Env) {
-        require_admin(&e);
-        set_paused(&e, true);
+        require_admin(&env);
+        set_paused(&env, true);
     }
 
     pub fn unpause(env: Env) {
-        require_admin(&e);
-        set_paused(&e, false);
+        require_admin(&env);
+        set_paused(&env, false);
     }
 
     pub fn update_config(env: Env, new_config: AuctionConfig) {
@@ -369,17 +370,17 @@ impl DutchAuctionContract {
     }
 
     pub fn get_active_auctions(env: Env) -> Vec<BytesN<32>> {
-        env.storage().instance().get(&DataKey::ActiveAuctions).unwrap_or(Vec::new(&e))
+        env.storage().instance().get(&DataKey::ActiveAuctions).unwrap_or(Vec::new(&env))
     }
 
     pub fn get_user_auctions(env: Env, user: Address) -> Vec<BytesN<32>> {
         env.storage().persistent().get(&DataKey::UserAuctions(user))
-            .unwrap_or(Vec::new(&e))
+            .unwrap_or(Vec::new(&env))
     }
 
     pub fn get_user_bids(env: Env, user: Address) -> Vec<BytesN<32>> {
         env.storage().persistent().get(&DataKey::UserBids(user))
-            .unwrap_or(Vec::new(&e))
+            .unwrap_or(Vec::new(&env))
     }
 
     pub fn get_config(env: Env) -> AuctionConfig {
@@ -387,7 +388,7 @@ impl DutchAuctionContract {
     }
 
     pub fn version(env: Env) -> u32 {
-        read_version(&e)
+        read_version(&env)
     }
 
     // Helper functions
@@ -475,7 +476,7 @@ impl DutchAuctionContract {
         floor_price.checked_add(price_above_floor).expect("Arithmetic overflow")
     }
 
-    fn process_bid(e: &Env, auction: &mut Auction, bidder: &Address, amount: i128) -> Result<(), DutchAuctionError> {
+    fn process_bid(env: &Env, auction: &mut Auction, bidder: &Address, amount: i128) -> Result<(), DutchAuctionError> {
         // Check if auction is still active
         let total_duration = auction.duration.checked_add(auction.final_extension_time).expect("Time overflow");
         let end_time = auction.start_time.checked_add(total_duration).expect("Time overflow");
@@ -489,7 +490,7 @@ impl DutchAuctionContract {
         }
 
         // Get current price
-        let current_price = Self::get_current_price(e, auction.id.clone());
+        let current_price = Self::get_current_price(env.clone(), auction.id.clone());
         
         // Check if bid meets minimum price
         if amount < current_price {
@@ -506,7 +507,7 @@ impl DutchAuctionContract {
         }
 
         // Transfer tokens to contract
-        let token_client = soroban_sdk::token::Client::new(e, &auction.token);
+        let token_client = soroban_sdk::token::Client::new(env, &auction.token);
         let contract_address = env.current_contract_address();
         
         token_client.transfer(bidder, &contract_address, &amount);
@@ -530,9 +531,9 @@ impl DutchAuctionContract {
         auction.current_price = current_price;
 
         // Check for auction extension
-        let extension_point = end_timenv.checked_sub(auction.extension_threshold).expect("Time error");
+        let extension_point = end_time.checked_sub(auction.extension_threshold).expect("Time error");
         if env.ledger().timestamp() > extension_point {
-            auction.final_extension_time = auction.final_extension_timenv.checked_add(auction.extension_duration).expect("Time overflow");
+            auction.final_extension_time = auction.final_extension_time.checked_add(auction.extension_duration).expect("Time overflow");
         }
 
         // Add to user's bids
@@ -544,7 +545,7 @@ impl DutchAuctionContract {
         Ok(())
     }
 
-    fn check_rate_limit(e: &Env, bidder: &Address, auction: &Auction) -> Result<(), DutchAuctionError> {
+    fn check_rate_limit(env: &Env, bidder: &Address, auction: &Auction) -> Result<(), DutchAuctionError> {
         if !auction.anti_bot_enabled {
             return Ok(());
         }
@@ -581,7 +582,7 @@ impl DutchAuctionContract {
         Ok(())
     }
 
-    fn update_rate_limiter(e: &Env, bidder: &Address) {
+    fn update_rate_limiter(env: &Env, bidder: &Address) {
         let rate_limiter_key = DataKey::RateLimiter(bidder.clone());
         let mut rate_limiter: RateLimiter = env.storage().persistent().get(&rate_limiter_key)
             .unwrap_or(RateLimiter {
@@ -596,15 +597,15 @@ impl DutchAuctionContract {
         env.storage().persistent().set(&rate_limiter_key, &rate_limiter);
     }
 
-    fn calculate_commitment(e: &Env, amount: i128, nonce: u32) -> BytesN<32> {
+    fn calculate_commitment(env: &Env, amount: i128, nonce: u32) -> BytesN<32> {
         let mut data = Vec::new(env);
         data.push_back(amount.into_val(env));
         data.push_back(nonce.into_val(env));
         env.crypto().sha256(&data.to_bytes())
     }
 
-    fn process_final_refunds(e: &Env, auction: &mut Auction) {
-        let token_client = soroban_sdk::token::Client::new(e, &auction.token);
+    fn process_final_refunds(env: &Env, auction: &mut Auction) {
+        let token_client = soroban_sdk::token::Client::new(env, &auction.token);
         let contract_address = env.current_contract_address();
 
         // Sort bids by amount (highest first)
@@ -639,8 +640,8 @@ impl DutchAuctionContract {
         }
     }
 
-    fn refund_all_bids(e: &Env, auction: &mut Auction) {
-        let token_client = soroban_sdk::token::Client::new(e, &auction.token);
+    fn refund_all_bids(env: &Env, auction: &mut Auction) {
+        let token_client = soroban_sdk::token::Client::new(env, &auction.token);
         let contract_address = env.current_contract_address();
 
         for bid in auction.bids.iter() {
@@ -648,7 +649,7 @@ impl DutchAuctionContract {
         }
     }
 
-    fn generate_auction_id(e: &Env, organizer: &Address, token: &Address, initial_price: i128) -> BytesN<32> {
+    fn generate_auction_id(env: &Env, organizer: &Address, token: &Address, initial_price: i128) -> BytesN<32> {
         let mut data = Vec::new(env);
         data.push_back(organizer.to_val());
         data.push_back(token.to_val());

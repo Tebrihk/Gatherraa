@@ -1,6 +1,7 @@
 #![no_std]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
+#![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::cast_possible_truncation)]
@@ -16,7 +17,7 @@ mod proxy;
 mod upgrade_manager;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, map, Address, BytesN, Env, IntoVal, String, Symbol, Vec, Map, U256,
+    contract, contractimpl, symbol_short, Address, BytesN, Env, Symbol, Vec,
 };
 
 use gathera_common::{
@@ -536,8 +537,8 @@ impl EscrowContract {
     }
 
     // Helper functions
-    fn generate_escrow_id(e: &Env, event: &Address, purchaser: &Address, amount: i128) -> BytesN<32> {
-        let mut data = Vec::new(e);
+    fn generate_escrow_id(env: &Env, event: &Address, purchaser: &Address, amount: i128) -> BytesN<32> {
+        let mut data = Vec::new(env);
         data.push_back(event.to_val());
         data.push_back(purchaser.to_val());
         data.push_back(amount.to_val());
@@ -581,8 +582,8 @@ impl EscrowContract {
             .expect("Arithmetic overflow in split calculation")
     }
 
-    fn distribute_revenue(e: &Env, escrow: &Escrow) {
-        let token_client = soroban_sdk::token::Client::new(e, &escrow.token);
+    fn distribute_revenue(env: &Env, escrow: &Escrow) {
+        let token_client = soroban_sdk::token::Client::new(env, &escrow.token);
         let contract_address = env.current_contract_address();
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
 
@@ -608,13 +609,13 @@ impl EscrowContract {
         if let Some(ref ref_addr) = escrow.referral {
             if referral_amount > 0 {
                 token_client.transfer(&contract_address, ref_addr, &referral_amount);
-                Self::update_referral_rewards(e, ref_addr, referral_amount);
+                Self::update_referral_rewards(env, ref_addr, referral_amount);
             }
         }
     }
 
-    fn distribute_revenue_with_error_handling(e: &Env, escrow: &Escrow) -> Result<(), &'static str> {
-        let token_client = soroban_sdk::token::Client::new(e, &escrow.token);
+    fn distribute_revenue_with_error_handling(env: &Env, escrow: &Escrow) -> Result<(), &'static str> {
+        let token_client = soroban_sdk::token::Client::new(env, &escrow.token);
         let contract_address = env.current_contract_address();
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
 
@@ -641,14 +642,14 @@ impl EscrowContract {
                 if let Err(_) = token_client.try_transfer(&contract_address, ref_addr, &referral_amount) {
                     return Err("referral transfer failed");
                 }
-                Self::update_referral_rewards(e, ref_addr, referral_amount);
+                Self::update_referral_rewards(env, ref_addr, referral_amount);
             }
         }
 
         Ok(())
     }
 
-    fn track_referral(e: &Env, referrer: &Address, purchaser: &Address) {
+    fn track_referral(env: &Env, referrer: &Address, purchaser: &Address) {
         // Prevent self-referral
         if referrer == purchaser {
             return;
@@ -669,7 +670,7 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &tracker);
     }
 
-    fn update_referral_rewards(e: &Env, referrer: &Address, reward_amount: i128) {
+    fn update_referral_rewards(env: &Env, referrer: &Address, reward_amount: i128) {
         let key = DataKey::ReferralTracker(referrer.clone());
         let mut tracker: ReferralTracker = env.storage().persistent().get(&key)
             .unwrap_or(ReferralTracker {

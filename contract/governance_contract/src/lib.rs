@@ -1,9 +1,15 @@
 #![no_std]
+#![deny(clippy::all)]
+#![deny(clippy::pedantic)]
+#![warn(clippy::nursery)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::cast_possible_truncation)]
 
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Vec, token, log};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol, Vec, token};
 
 mod storage;
-use storage::*;
+use storage::{DataKey, Proposal, ProposalStatus, ProposalCategory, CategorySettings, GovernanceAction, VoteRecord};
 
 #[contract]
 pub struct GovernanceContract;

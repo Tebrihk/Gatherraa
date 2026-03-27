@@ -1,6 +1,7 @@
 #![no_std]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
+#![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::cast_possible_truncation)]
@@ -13,7 +14,7 @@ use storage_types::{DataKey, WalletConfig, Signer, Role, Transaction, Transactio
                    Batch, BatchStatus, TimelockQueue, DailySpending, NonceManager, MultisigError};
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, map, Address, BytesN, Env, IntoVal, String, Symbol, Vec, Map, U256,
+    contract, contractimpl, symbol_short, Address, BytesN, Env, IntoVal, Symbol, Vec, Map,
 };
 use gathera_common::{
     require_admin, is_paused, set_paused, read_version, write_version
@@ -571,7 +572,7 @@ impl MultisigWalletContract {
         }
     }
 
-    fn add_signer_internal(e: &Env, signer_address: Address, role: Role, weight: u32) {
+    fn add_signer_internal(env: &Env, signer_address: Address, role: Role, weight: u32) {
         let mut signers: Vec<Signer> = env.storage().persistent().get(&DataKey::Signers).unwrap_or(Vec::new(env));
         
         // Check if signer already exists
@@ -599,7 +600,7 @@ impl MultisigWalletContract {
         );
     }
 
-    fn validate_signer(e: &Env, signer: &Address) -> Result<(), MultisigError> {
+    fn validate_signer(env: &Env, signer: &Address) -> Result<(), MultisigError> {
         let signers: Vec<Signer> = env.storage().persistent().get(&DataKey::Signers).unwrap_or(Vec::new(env));
         
         for s in signers.iter() {
@@ -614,8 +615,8 @@ impl MultisigWalletContract {
         Err(MultisigError::InvalidSigner)
     }
 
-    fn validate_nonce(e: &Env, signer: &Address, nonce: u64) -> Result<(), MultisigError> {
-        let mut nonce_manager: NonceManager = env.storage().instance().get(&DataKey::Nonce).unwrap();
+    fn validate_nonce(env: &Env, signer: &Address, nonce: u64) -> Result<(), MultisigError> {
+        let nonce_manager: NonceManager = env.storage().instance().get(&DataKey::Nonce).unwrap();
         
         if let Some(used_nonce) = nonce_manager.used_nonces.get(signer) {
             if nonce <= used_nonce {
@@ -626,7 +627,7 @@ impl MultisigWalletContract {
         Ok(())
     }
 
-    fn use_nonce(e: &Env, signer: &Address, nonce: u64) {
+    fn use_nonce(env: &Env, signer: &Address, nonce: u64) {
         let mut nonce_manager: NonceManager = env.storage().instance().get(&DataKey::Nonce).unwrap();
         nonce_manager.used_nonces.set(signer.clone(), nonce);
         env.storage().instance().set(&DataKey::Nonce, &nonce_manager);
@@ -664,11 +665,11 @@ impl MultisigWalletContract {
         total_weight >= required
     }
 
-    fn check_daily_spending(e: &Env, transaction: &Transaction) -> Result<(), MultisigError> {
-        let today = Self::get_today_timestamp(e);
+    fn check_daily_spending(env: &Env, transaction: &Transaction) -> Result<(), MultisigError> {
+        let today = Self::get_today_timestamp(env);
         let config: WalletConfig = env.storage().instance().get(&DataKey::WalletConfig).unwrap();
         
-        let mut daily_spending: DailySpending = env.storage().persistent().get(&DataKey::DailySpending(today))
+        let daily_spending: DailySpending = env.storage().persistent().get(&DataKey::DailySpending(today))
             .unwrap_or(DailySpending {
                 date: today,
                 spent: 0,
@@ -683,8 +684,8 @@ impl MultisigWalletContract {
         Ok(())
     }
 
-    fn update_daily_spending(e: &Env, transaction: &Transaction) {
-        let today = Self::get_today_timestamp(e);
+    fn update_daily_spending(env: &Env, transaction: &Transaction) {
+        let today = Self::get_today_timestamp(env);
         let config: WalletConfig = env.storage().instance().get(&DataKey::WalletConfig).unwrap();
         
         let mut daily_spending: DailySpending = env.storage().persistent().get(&DataKey::DailySpending(today))
@@ -698,28 +699,28 @@ impl MultisigWalletContract {
         env.storage().persistent().set(&DataKey::DailySpending(today), &daily_spending);
     }
 
-    fn get_today_timestamp(e: &Env) -> u64 {
+    fn get_today_timestamp(env: &Env) -> u64 {
         let current_time = env.ledger().timestamp();
         (current_time / 86400) * 86400 // Round down to start of day
     }
 
-    fn generate_transaction_id(e: &Env, to: &Address, token: &Address, amount: i128, proposer: &Address, nonce: u64) -> BytesN<32> {
-        let mut data = Vec::new(e);
+    fn generate_transaction_id(env: &Env, to: &Address, token: &Address, amount: i128, proposer: &Address, nonce: u64) -> BytesN<32> {
+        let mut data = Vec::new(env);
         data.push_back(to.to_val());
         data.push_back(token.to_val());
-        data.push_back(amount.into_val(e));
+        data.push_back(amount.into_val(env));
         data.push_back(proposer.to_val());
-        data.push_back(nonce.into_val(e));
+        data.push_back(nonce.into_val(env));
         data.push_back(env.ledger().timestamp().to_val());
         
         env.crypto().sha256(&data.to_bytes())
     }
 
-    fn generate_batch_id(e: &Env, transactions: &Vec<BytesN<32>>, proposer: &Address, nonce: u64) -> BytesN<32> {
-        let mut data = Vec::new(e);
-        data.push_back(transactions.len().into_val(e));
+    fn generate_batch_id(env: &Env, transactions: &Vec<BytesN<32>>, proposer: &Address, nonce: u64) -> BytesN<32> {
+        let mut data = Vec::new(env);
+        data.push_back(transactions.len().into_val(env));
         data.push_back(proposer.to_val());
-        data.push_back(nonce.into_val(e));
+        data.push_back(nonce.into_val(env));
         data.push_back(env.ledger().timestamp().to_val());
         
         for tx_id in transactions.iter() {

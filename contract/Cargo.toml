@@ -21,6 +21,17 @@ members = [
     "vrf_contract",
 ]
 
+# Workspace-level Clippy lint configuration
+[workspace.lints.clippy]
+# Deny common lint groups
+all = "deny"
+pedantic = "deny"
+nursery = "warn"
+# Allowed lints that are too noisy for this codebase
+module_name_repetitions = "allow"
+too_many_arguments = "allow"
+cast_possible_truncation = "allow"
+
 [profile.release]
 opt-level = "z"
 debug = 0

@@ -1,6 +1,7 @@
 #![no_std]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
+#![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::cast_possible_truncation)]
@@ -15,7 +16,7 @@ use storage_types::{DataKey, ContractRegistry, ContractInfo, ContractPermissions
                    ContractState, CrossContractError};
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, map, Address, BytesN, Env, IntoVal, String, Symbol, Vec, Map, U256,
+    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, Symbol, Vec, Map,
 };
 
 #[contract]
@@ -128,6 +129,8 @@ impl CrossContractContract {
             (symbol_short!("contract_registered"), contract_address.clone()),
             (contract_type, version),
         );
+
+        Ok(())
     }
 
     // Execute single contract call
@@ -136,8 +139,8 @@ impl CrossContractContract {
         contract_address: Address,
         function_name: Symbol,
         arguments: Vec<soroban_sdk::Val>,
-        value: Option<i128>,
-    ) -> soroban_sdk::Val {
+        _value: Option<i128>,
+    ) -> Result<soroban_sdk::Val, CrossContractError> {
         let caller = env.current_contract_address();
         
         // Check permissions
@@ -163,7 +166,7 @@ impl CrossContractContract {
             (function_name, caller),
         );
 
-        result
+        Ok(result)
     }
 
     /// Executes a sequence of contract calls atomically.
@@ -345,7 +348,7 @@ impl CrossContractContract {
         let mut registry: ContractRegistry = env.storage().instance().get(&DataKey::ContractRegistry).unwrap();
         
         if let Some(mut contract_info) = registry.contracts.get(from_contract.clone()) {
-            for permission in permissions.iter() {
+            for _permission in permissions.iter() {
                 contract_info.permissions.delegate_auth_to.push_back(to_contract.clone());
             }
             registry.contracts.set(from_contract.clone(), contract_info);
@@ -455,10 +458,10 @@ impl CrossContractContract {
         let graph: DependencyGraph = env.storage().instance().get(&DataKey::DependencyGraph).unwrap();
         
         // Simple DFS to detect cycles
-        let mut visited = Vec::new(e);
-        let mut recursion_stack = Vec::new(e);
+        let mut visited = Vec::new(env);
+        let mut recursion_stack = Vec::new(env);
         
-        if Self::has_cycle_dfs(e, &graph, contract_address, &mut visited, &mut recursion_stack) {
+        if Self::has_cycle_dfs(env, &graph, contract_address, &mut visited, &mut recursion_stack) {
             return Err(CrossContractError::CircularDependency);
         }
         
@@ -478,7 +481,7 @@ impl CrossContractContract {
         if let Some(node_info) = graph.nodes.get(node.clone()) {
             for neighbor in node_info.dependencies.iter() {
                 if !visited.contains(neighbor) {
-                    if Self::has_cycle_dfs(e, graph, neighbor, visited, recursion_stack) {
+                    if Self::has_cycle_dfs(env, graph, neighbor, visited, recursion_stack) {
                         return true;
                     }
                 } else if recursion_stack.contains(neighbor) {
@@ -498,7 +501,7 @@ impl CrossContractContract {
         let node = DependencyNode {
             contract_address: contract_address.clone(),
             contract_type: contract_type.clone(),
-            dependents: Vec::new(e),
+            dependents: Vec::new(env),
             dependencies: dependencies.clone(),
             circular_dependency: false,
         };
@@ -546,7 +549,7 @@ impl CrossContractContract {
                 let rollback_data = RollbackData {
                     contract_address: operation.contract_address.clone(),
                     rollback_function: symbol_short!("rollback"),
-                    rollback_arguments: Vec::new(e),
+                    rollback_arguments: Vec::new(env),
                 };
                 atomic_op.rollback_data.push_back(rollback_data);
             }
@@ -554,7 +557,7 @@ impl CrossContractContract {
             // Handle failure
             if operation.requires_success && result == soroban_sdk::Val::VOID {
                 // Rollback previous operations
-                Self::rollback_operations(e, &atomic_op, i)?;
+                Self::rollback_operations(env, &atomic_op, i)?;
                 atomic_op.status = OperationStatus::Failed;
                 env.storage().instance().set(&DataKey::AtomicOperation(operation_id.clone()), &atomic_op);
                 return Err(CrossContractError::AtomicOperationFailed);
@@ -588,10 +591,10 @@ impl CrossContractContract {
     }
 
     fn generate_operation_id(env: &Env, caller: &Address, operations: &Vec<ContractCall>) -> BytesN<32> {
-        let mut data = Vec::new(e);
+        let mut data = Vec::new(env);
         data.push_back(caller.to_val());
         data.push_back(env.ledger().timestamp().to_val());
-        data.push_back(operations.len().into_val(e));
+        data.push_back(operations.len().into_val(env));
         
         for operation in operations.iter() {
             data.push_back(operation.contract_address.to_val());
@@ -602,7 +605,7 @@ impl CrossContractContract {
     }
 
     fn generate_callback_id(env: &Env, trigger_contract: &Address, trigger_function: &Symbol) -> BytesN<32> {
-        let mut data = Vec::new(e);
+        let mut data = Vec::new(env);
         data.push_back(trigger_contract.to_val());
         data.push_back(trigger_function.to_val());
         data.push_back(env.ledger().timestamp().to_val());
