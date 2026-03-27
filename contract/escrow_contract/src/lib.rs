@@ -14,6 +14,9 @@ mod security_tests;
 #[cfg(test)]
 mod test_gas;
 
+#[cfg(test)]
+mod edge_case_tests;
+
 mod storage_types;
 use storage_types::{DataKey, Escrow, EscrowStatus, RevenueSplit, Milestone, Dispute, 
                    DisputeResolution, ReferralTracker, RevenueSplitConfig, EscrowError};

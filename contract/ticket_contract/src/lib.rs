@@ -14,6 +14,9 @@ mod security_tests;
 #[cfg(test)]
 mod test_gas;
 
+#[cfg(test)]
+mod edge_case_tests;
+
 use soroban_sdk::{
     contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, String, Symbol, Vec,
 };

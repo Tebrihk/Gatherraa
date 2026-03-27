@@ -13,3 +13,6 @@ pub mod types;
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod edge_case_tests;
