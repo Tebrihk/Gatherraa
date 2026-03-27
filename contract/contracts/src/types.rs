@@ -1,4 +1,5 @@
 use soroban_sdk::{contracttype, Address, Symbol};
+use gathera_common::types::{Timestamp, TokenAmount, DurationSeconds, TierId};
 
 /// Storage keys for the Staking Contract.
 #[contracttype]
@@ -8,7 +9,7 @@ pub enum DataKey {
     Config,
     /// Reward tier information: [u32] (Tier ID).
     Tier(u32),
-    /// Information about a specific staker: [Address].
+    /// Storage key for a specific staker: [Address].
     UserInfo(Address),
     /// Accumulated reward per token stored.
     RewardPerTokenStored,
@@ -35,7 +36,7 @@ pub struct Config {
     /// Token used for rewards.
     pub reward_token: Address,
     /// Global reward rate per second.
-    pub reward_rate: i128,
+    pub reward_rate: TokenAmount,
 }
 
 /// A specific reward tier for staking.
@@ -43,7 +44,7 @@ pub struct Config {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Tier {
     /// Minimum amount of tokens required for this tier.
-    pub min_amount: i128,
+    pub min_amount: TokenAmount,
     /// Reward multiplier (e.g., 100 = 1x, 150 = 1.5x).
     pub reward_multiplier: u32,
 }
@@ -53,17 +54,17 @@ pub struct Tier {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserInfo {
     /// Current amount of tokens staked.
-    pub amount: i128,
+    pub amount: TokenAmount,
     /// Equivalent shares based on reward tiers.
-    pub shares: i128,
+    pub shares: TokenAmount,
     /// Last reward per token amount that was paid out or updated.
-    pub reward_per_token_paid: i128,
+    pub reward_per_token_paid: TokenAmount,
     /// Accumulated rewards waiting to be claimed.
-    pub rewards: i128,
+    pub rewards: TokenAmount,
     /// Timestamp when the current stake was locked.
-    pub lock_start_time: u64,
+    pub lock_start_time: Timestamp,
     /// Total duration for which the stake is locked.
-    pub lock_duration: u64,
+    pub lock_duration: DurationSeconds,
     /// Current assigned tier ID for the user.
-    pub tier_id: u32,
+    pub tier_id: TierId,
 }

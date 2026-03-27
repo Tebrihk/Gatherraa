@@ -1,4 +1,7 @@
 use soroban_sdk::{contracttype, Address, Bytes, String, Symbol};
+use gathera_common::types::{
+    Timestamp, TokenAmount, BasisPoints, DurationSeconds, LedgerSequence, DurationLedgers,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,34 +50,36 @@ pub enum PricingStrategy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PricingConfig {
     pub oracle_address: Address,
-    pub dex_pool_address: Address, // Fallback
-    pub price_floor: i128,
-    pub price_ceiling: i128,
-    pub update_frequency: u64, // Seconds
-    pub last_update_time: u64,
+    /// Fallback DEX pool address for price discovery.
+    pub dex_pool_address: Address,
+    pub price_floor: TokenAmount,
+    pub price_ceiling: TokenAmount,
+    /// Minimum seconds between price updates.
+    pub update_frequency: DurationSeconds,
+    pub last_update_time: Timestamp,
     pub is_frozen: bool,
     /// Asset pair string to query the oracle, e.g. "XLM/USD".
     pub oracle_pair: String,
     /// Reference baseline price from oracle (8 decimals) for computing the multiplier.
     /// Set this once at init time via a trusted first price; updated by `update_oracle_reference`.
-    pub oracle_reference_price: i128,
+    pub oracle_reference_price: TokenAmount,
     /// How old an oracle price can be (seconds) before we fall back to the DEX.
-    pub max_oracle_age_seconds: u64,
+    pub max_oracle_age_seconds: DurationSeconds,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EventInfo {
-    pub start_time: u64,
-    pub refund_cutoff_time: u64,
+    pub start_time: Timestamp,
+    pub refund_cutoff_time: Timestamp,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Tier {
     pub name: String,
-    pub base_price: i128,
-    pub current_price: i128,
+    pub base_price: TokenAmount,
+    pub current_price: TokenAmount,
     pub max_supply: u32,
     pub minted: u32,
     pub active: bool,
@@ -85,8 +90,8 @@ pub struct Tier {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ticket {
     pub tier_symbol: Symbol,
-    pub purchase_time: u64,
-    pub price_paid: i128,
+    pub purchase_time: Timestamp,
+    pub price_paid: TokenAmount,
     pub is_valid: bool,
 }
 /// VRF-specific structures for ticket allocation
@@ -108,18 +113,18 @@ pub struct AllocationConfig {
     pub total_allocations: u32,
     pub allocated_count: u32,
     pub allocation_complete: bool,
-    pub finalization_ledger: u32,
-    pub reveal_start_ledger: u32,
-    pub reveal_end_ledger: u32,
+    pub finalization_ledger: LedgerSequence,
+    pub reveal_start_ledger: LedgerSequence,
+    pub reveal_end_ledger: LedgerSequence,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AntiSnipingConfig {
-    pub minimum_lock_period: u32,
+    pub minimum_lock_period: DurationLedgers,
     pub max_entries_per_address: u32,
-    pub rate_limit_window: u64,
-    pub randomization_delay_ledgers: u32,
+    pub rate_limit_window: DurationSeconds,
+    pub randomization_delay_ledgers: DurationLedgers,
 }
 
 #[contracttype]
@@ -128,7 +133,7 @@ pub struct VRFState {
     pub randomness_generated: bool,
     pub randomness_hash: Bytes,
     pub batch_nonce: u32,
-    pub finalization_ledger: u32,
+    pub finalization_ledger: LedgerSequence,
 }
 #[soroban_sdk::contracterror]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]

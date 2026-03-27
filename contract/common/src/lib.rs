@@ -10,6 +10,7 @@ pub mod access;
 pub mod error;
 pub mod reentrancy;
 pub mod storage;
+pub mod types;
 pub mod upgrade;
 pub mod validation;
 
@@ -17,5 +18,6 @@ pub use access::*;
 pub use error::*;
 pub use reentrancy::*;
 pub use storage::*;
+pub use types::*;
 pub use upgrade::*;
 pub use validation::*;

@@ -1,4 +1,5 @@
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec, Map, U256};
+use gathera_common::types::Timestamp;
 
 /// Storage keys for the ZK Ticket Contract.
 #[derive(Clone)]
@@ -49,11 +50,11 @@ pub struct ZKProof {
     /// Hash of the verification parameters for integrity.
     pub verification_hash: BytesN<32>,
     /// Timestamp when the proof was submitted.
-    pub created_at: u64,
+    pub created_at: Timestamp,
     /// Timestamp when verification was completed.
-    pub verified_at: Option<u64>,
+    pub verified_at: Option<Timestamp>,
     /// Expiration timestamp for this proof.
-    pub expires_at: u64,
+    pub expires_at: Timestamp,
     /// Flag indicating if the proof has been revoked.
     pub revoked: bool,
     /// ID of the batch this proof was verified in, if any.
@@ -106,7 +107,7 @@ pub struct TicketCommitment {
     /// Hash of the base ticket data.
     pub ticket_hash: BytesN<32>,
     /// Creation timestamp.
-    pub created_at: u64,
+    pub created_at: Timestamp,
     /// The nullifier that will be revealed upon use.
     pub nullifier: BytesN<32>,
     /// Combined hash of all attribute commitments.
@@ -123,7 +124,7 @@ pub struct NullifierInfo {
     /// Whether this nullifier has been used (revealed).
     pub used: bool,
     /// When the nullifier was used.
-    pub used_at: Option<u64>,
+    pub used_at: Option<Timestamp>,
     /// The proof ID that revealed this nullifier.
     pub proof_id: Option<BytesN<32>>,
 }
@@ -140,8 +141,7 @@ pub struct EventCommitments {
     /// Number of tickets currently active.
     pub active_tickets: u32,
     /// Registration timestamp.
-    pub created_at: u64,
-    /// Circuit parameters specifically for this event's tickets.
+    pub created_at: Timestamp,
     pub circuit_params: CircuitParameters,
 }
 
@@ -170,7 +170,7 @@ pub struct VerificationCache {
     /// Result of the verification (true = valid).
     pub result: bool,
     /// Timestamp when the result was cached.
-    pub timestamp: u64,
+    pub timestamp: Timestamp,
     /// ID of the proof being cached.
     pub proof_id: BytesN<32>,
 }
@@ -183,7 +183,7 @@ pub struct RevocationList {
     /// Nullifiers associated with revoked tickets.
     pub revoked_nullifiers: Vec<BytesN<32>>,
     /// Last update timestamp.
-    pub last_updated: u64,
+    pub last_updated: Timestamp,
 }
 
 /// Status and data for a batch verification operation.
@@ -196,9 +196,9 @@ pub struct BatchVerification {
     /// Parallel list of verification results.
     pub results: Vec<bool>,
     /// Initiation timestamp.
-    pub created_at: u64,
+    pub created_at: Timestamp,
     /// Completion timestamp.
-    pub completed_at: Option<u64>,
+    pub completed_at: Option<Timestamp>,
     /// Current status of the batch.
     pub status: BatchStatus,
 }
@@ -224,7 +224,7 @@ pub struct MobileProofData {
     /// Template used for mobile-optimized proofs.
     pub proof_template: Vec<u8>,
     /// Last usage timestamp.
-    pub last_used: u64,
+    pub last_used: Timestamp,
     /// Total number of proofs verified for this device.
     pub usage_count: u32,
 }

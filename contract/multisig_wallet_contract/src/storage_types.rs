@@ -1,4 +1,5 @@
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec, Map, U256};
+use gathera_common::types::{Timestamp, TokenAmount, DurationSeconds, SignerWeight};
 
 /// Storage keys for the Multisig Wallet Contract.
 #[derive(Clone)]
@@ -35,17 +36,17 @@ pub struct WalletConfig {
     /// Total number of signers (N in M-of-N).
     pub n: u32,
     /// Maximum amount allowed to be spent per day without extra approval.
-    pub daily_spending_limit: i128,
+    pub daily_spending_limit: TokenAmount,
     /// Transactions above this threshold require a timelock.
-    pub timelock_threshold: i128,
+    pub timelock_threshold: TokenAmount,
     /// Mandatory waiting period for high-value transactions (seconds).
-    pub timelock_duration: u64,
+    pub timelock_duration: DurationSeconds,
     /// Duration after which a proposed transaction expires (seconds).
-    pub transaction_expiry: u64,
+    pub transaction_expiry: DurationSeconds,
     /// Maximum number of transactions allowed in a single batch.
     pub max_batch_size: u32,
     /// Duration of a manual emergency freeze (seconds).
-    pub emergency_freeze_duration: u64,
+    pub emergency_freeze_duration: DurationSeconds,
 }
 
 /// A registered signer in the multisig wallet.
@@ -56,15 +57,15 @@ pub struct Signer {
     /// The role assigned to the signer (controls permissions).
     pub role: Role,
     /// The voting weight of the signer.
-    pub weight: u32,
+    pub weight: SignerWeight,
     /// Total amount spent by this signer today.
-    pub daily_spent: i128,
+    pub daily_spent: TokenAmount,
     /// Timestamp when daily spent was last reset.
-    pub last_spending_reset: u64,
+    pub last_spending_reset: Timestamp,
     /// Whether the signer is currently active.
     pub active: bool,
     /// Timestamp when the signer was added to the wallet.
-    pub added_at: u64,
+    pub added_at: Timestamp,
 }
 
 /// Roles that can be assigned to signers.
@@ -88,7 +89,7 @@ pub struct Transaction {
     /// Token address for the transfer.
     pub token: Address,
     /// Amount to transfer.
-    pub amount: i128,
+    pub amount: TokenAmount,
     /// Optional data for contract calls.
     pub data: Vec<u8>,
     /// Address that proposed the transaction.
@@ -98,11 +99,11 @@ pub struct Transaction {
     /// Current lifecycle status.
     pub status: TransactionStatus,
     /// Creation timestamp.
-    pub created_at: u64,
+    pub created_at: Timestamp,
     /// Expiration timestamp.
-    pub expires_at: u64,
+    pub expires_at: Timestamp,
     /// Timestamp after which the transaction can be executed (if timelocked).
-    pub timelock_until: u64,
+    pub timelock_until: Timestamp,
     /// ID of the batch this transaction belongs to, if any.
     pub batch_id: Option<BytesN<32>>,
 }
@@ -138,9 +139,9 @@ pub struct Batch {
     /// Current batch lifecycle status.
     pub status: BatchStatus,
     /// Creation timestamp.
-    pub created_at: u64,
+    pub created_at: Timestamp,
     /// Expiration timestamp.
-    pub expires_at: u64,
+    pub expires_at: Timestamp,
 }
 
 /// Lifecycle status of a batch.
@@ -175,11 +176,11 @@ pub struct TimelockQueue {
 #[derive(Clone)]
 pub struct DailySpending {
     /// The date (start of day).
-    pub date: u64,
+    pub date: Timestamp,
     /// Amount already spent today.
-    pub spent: i128,
+    pub spent: TokenAmount,
     /// Maximum limit for today.
-    pub limit: i128,
+    pub limit: TokenAmount,
 }
 
 /// Managed nonces for replay protection across signatures.

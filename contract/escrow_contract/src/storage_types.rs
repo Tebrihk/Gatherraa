@@ -1,4 +1,5 @@
 use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, Vec, Map, U256, String, i128, u64, u32};
+use gathera_common::types::{Timestamp, TokenAmount, Percentage, MilestoneId, DurationSeconds};
 
 /// Storage keys for the Escrow Contract.
 #[contracttype]
@@ -44,13 +45,13 @@ pub struct Escrow {
     /// Address of the student/purchaser.
     pub purchaser: Address,
     /// Total amount of tokens locked.
-    pub amount: i128,
+    pub amount: TokenAmount,
     /// Token address used for the escrow.
     pub token: Address,
     /// Timestamp when the escrow was created.
-    pub created_at: u64,
+    pub created_at: Timestamp,
     /// Timestamp when the tokens are scheduled for release.
-    pub release_time: u64,
+    pub release_time: Timestamp,
     /// Current status of the escrow.
     pub status: EscrowStatus,
     /// Revenue split configuration for this escrow.
@@ -84,11 +85,11 @@ pub enum EscrowStatus {
 #[derive(Clone)]
 pub struct RevenueSplit {
     /// Percentage allocated to the organizer.
-    pub organizer_percentage: u32,
+    pub organizer_percentage: Percentage,
     /// Percentage allocated to the platform.
-    pub platform_percentage: u32,
+    pub platform_percentage: Percentage,
     /// Percentage allocated to the referrer (if any).
-    pub referral_percentage: u32,
+    pub referral_percentage: Percentage,
     /// Calculation precision (e.g., 10000 for 100.00%).
     pub precision: u32,
 }
@@ -97,11 +98,11 @@ pub struct RevenueSplit {
 #[derive(Clone)]
 pub struct Milestone {
     /// Unique identifier for the milestone within the escrow.
-    pub id: u32,
+    pub id: MilestoneId,
     /// Amount of tokens to release upon completion.
-    pub amount: i128,
+    pub amount: TokenAmount,
     /// Minimum time before this milestone can be released.
-    pub release_time: u64,
+    pub release_time: Timestamp,
     /// Whether the milestone has already been released.
     pub released: bool,
 }
@@ -118,7 +119,7 @@ pub struct Dispute {
     /// List of symbols linking to evidence (e.g., hash of documents).
     pub evidence: Vec<Symbol>,
     /// Timestamp when the dispute was created.
-    pub created_at: u64,
+    pub created_at: Timestamp,
     /// Whether the dispute has been resolved.
     pub resolved: bool,
     /// Outcome of the dispute resolution.
@@ -147,9 +148,9 @@ pub struct DisputeResolution {
     /// Address awarded the funds.
     pub winner: Address,
     /// Amount returned to the purchaser.
-    pub refund_amount: i128,
+    pub refund_amount: TokenAmount,
     /// Amount deducted as a penalty or platform fee.
-    pub penalty_amount: i128,
+    pub penalty_amount: TokenAmount,
 }
 
 /// Tracks referral activity and rewards for a user.
@@ -158,34 +159,34 @@ pub struct ReferralTracker {
     /// The user being tracked.
     pub referrer: Address,
     /// Total rewards earned across all referrals.
-    pub total_rewards: i128,
+    pub total_rewards: TokenAmount,
     /// Number of successful referrals.
     pub referral_count: u32,
     /// Timestamp of the last referral event.
-    pub last_referral: u64,
+    pub last_referral: Timestamp,
 }
 
 /// Global parameters for revenue splitting and timeouts.
 #[derive(Clone)]
 pub struct RevenueSplitConfig {
     /// Default organizer share.
-    pub default_organizer_percentage: u32,
+    pub default_organizer_percentage: Percentage,
     /// Default platform fee.
-    pub default_platform_percentage: u32,
+    pub default_platform_percentage: Percentage,
     /// Default referral reward.
-    pub default_referral_percentage: u32,
+    pub default_referral_percentage: Percentage,
     /// Absolute maximum allowed referral reward.
-    pub max_referral_percentage: u32,
+    pub max_referral_percentage: Percentage,
     /// Precision used for percentage math.
     pub precision: u32,
     /// Minimum allowed escrow amount.
-    pub min_escrow_amount: i128,
+    pub min_escrow_amount: TokenAmount,
     /// Maximum allowed escrow amount.
-    pub max_escrow_amount: i128,
+    pub max_escrow_amount: TokenAmount,
     /// Seconds to wait before a dispute can be auto-resolved or escalated.
-    pub dispute_timeout: u64,
+    pub dispute_timeout: DurationSeconds,
     /// Time delay for administrative emergency withdrawals.
-    pub emergency_withdrawal_delay: u64,
+    pub emergency_withdrawal_delay: DurationSeconds,
 }
 
 // Custom errors

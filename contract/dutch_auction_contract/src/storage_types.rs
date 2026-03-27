@@ -1,4 +1,5 @@
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec, Map, U256};
+use gathera_common::types::{Timestamp, TokenAmount, DurationSeconds};
 
 #[derive(Clone)]
 pub enum DataKey {
@@ -20,34 +21,34 @@ pub struct Auction {
     pub organizer: Address,
     pub token: Address,
     pub ticket_nft: Address,
-    pub initial_price: i128,
-    pub reserve_price: i128,
-    pub floor_price: i128,
+    pub initial_price: TokenAmount,
+    pub reserve_price: TokenAmount,
+    pub floor_price: TokenAmount,
     pub decay_constant: u32, // k in the exponential decay formula
-    pub start_time: u64,
-    pub duration: u64,
-    pub extension_threshold: u64, // Time before end that triggers extension
-    pub extension_duration: u64,   // How much to extend by
-    pub current_price: i128,
+    pub start_time: Timestamp,
+    pub duration: DurationSeconds,
+    pub extension_threshold: DurationSeconds, // Time before end that triggers extension
+    pub extension_duration: DurationSeconds,   // How much to extend by
+    pub current_price: TokenAmount,
     pub total_tickets: u32,
     pub sold_tickets: u32,
     pub status: AuctionStatus,
     pub bids: Vec<Bid>,
     pub winner_commitments: Map<Address, BytesN<32>>, // For commit-reveal
-    pub final_extension_time: u64,
+    pub final_extension_time: Timestamp,
     pub anti_bot_enabled: bool,
-    pub min_bid_increment: i128,
+    pub min_bid_increment: TokenAmount,
 }
 
 #[derive(Clone)]
 pub struct Bid {
     pub bidder: Address,
-    pub amount: i128,
-    pub timestamp: u64,
+    pub amount: TokenAmount,
+    pub timestamp: Timestamp,
     pub commitment: Option<BytesN<32>>, // For commit-reveal scheme
     pub revealed: bool,
     pub ticket_ids: Vec<u32>,
-    pub refund_amount: i128,
+    pub refund_amount: TokenAmount,
 }
 
 #[derive(Clone, PartialEq)]
@@ -61,33 +62,33 @@ pub enum AuctionStatus {
 #[derive(Clone)]
 pub struct AuctionConfig {
     pub max_concurrent_auctions: u32,
-    pub default_duration: u64,
-    pub default_extension_threshold: u64,
-    pub default_extension_duration: u64,
+    pub default_duration: DurationSeconds,
+    pub default_extension_threshold: DurationSeconds,
+    pub default_extension_duration: DurationSeconds,
     pub default_decay_constant: u32,
-    pub max_duration: u64,
-    pub min_duration: u64,
+    pub max_duration: DurationSeconds,
+    pub min_duration: DurationSeconds,
     pub anti_bot_enabled: bool,
-    pub rate_limit_window: u64,
+    pub rate_limit_window: DurationSeconds,
     pub rate_limit_max_bids: u32,
     pub commit_reveal_enabled: bool,
-    pub commit_reveal_timeout: u64,
+    pub commit_reveal_timeout: DurationSeconds,
 }
 
 #[derive(Clone)]
 pub struct RateLimiter {
     pub address: Address,
     pub bid_count: u32,
-    pub window_start: u64,
-    pub last_bid_time: u64,
+    pub window_start: Timestamp,
+    pub last_bid_time: Timestamp,
 }
 
 #[derive(Clone)]
 pub struct CommitReveal {
     pub commitment: BytesN<32>,
     pub reveal_hash: Option<BytesN<32>>,
-    pub reveal_time: Option<u64>,
-    pub amount: Option<i128>,
+    pub reveal_time: Option<Timestamp>,
+    pub amount: Option<TokenAmount>,
     pub revealed: bool,
 }
 
