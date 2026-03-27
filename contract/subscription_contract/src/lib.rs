@@ -124,22 +124,7 @@ impl SubscriptionContract {
         subscription::process_subscription_payment(&env, &user, &plan);
 
         let subscription_id: u64 = env.storage().instance().get(&DataKey::NextSubscriptionId).unwrap();
-        let current_time = env.ledger().timestamp();
-        let duration_seconds = (plan.duration_days as u64).checked_mul(SECONDS_PER_DAY).expect("Time overflow");
-        let end_date = current_time.checked_add(duration_seconds).expect("Time overflow");
-
-        let subscription = UserSubscription {
-            subscription_id,
-            user: user.clone(),
-            plan_id,
-            status: SubscriptionStatus::Active,
-            start_date: current_time,
-            end_date,
-            last_payment_date: current_time,
-            auto_renew: true,
-            is_family_plan: false,
-            family_members: Vec::new(&env),
-        };
+        let subscription = Self::build_user_subscription(&env, user.clone(), plan_id, subscription_id, &plan, true);
 
         env.storage().persistent().set(&DataKey::UserSubscription(user.clone()), &subscription);
         let next_sub_id = subscription_id.checked_add(1).expect("ID overflow");
@@ -151,7 +136,7 @@ impl SubscriptionContract {
                 subscription_id,
                 user,
                 plan_id,
-                end_date,
+                end_date: subscription.end_date,
             },
         );
 
@@ -529,22 +514,14 @@ impl SubscriptionContract {
             .expect("Plan not found");
 
         let subscription_id: u64 = env.storage().instance().get(&DataKey::NextSubscriptionId).unwrap();
-        let current_time = env.ledger().timestamp();
-        let duration_seconds = (plan.duration_days as u64).checked_mul(SECONDS_PER_DAY).expect("Time overflow");
-        let end_date = current_time.checked_add(duration_seconds).expect("Time overflow");
-
-        let subscription = UserSubscription {
+        let subscription = Self::build_user_subscription(
+            &env,
+            user.clone(),
+            gift.plan_id,
             subscription_id,
-            user: user.clone(),
-            plan_id: gift.plan_id,
-            status: SubscriptionStatus::Active,
-            start_date: current_time,
-            end_date,
-            last_payment_date: current_time,
-            auto_renew: false,
-            is_family_plan: false,
-            family_members: Vec::new(&env),
-        };
+            &plan,
+            false, // gifted subscriptions default to no auto-renew
+        );
 
         gift.claimed = true;
 
@@ -559,7 +536,7 @@ impl SubscriptionContract {
                 subscription_id,
                 user,
                 plan_id: gift.plan_id,
-                end_date,
+                end_date: subscription.end_date,
             },
         );
 
@@ -648,5 +625,35 @@ impl SubscriptionContract {
         // This would need to iterate through all subscriptions to find if member is in any family plan
         // For efficiency, consider maintaining a reverse index in production
         false
+    }
+
+    /// Builds a new [`UserSubscription`] from a plan, assigning the given ID.
+    /// `auto_renew` is caller-controlled (direct purchase vs. gift claim differ here).
+    fn build_user_subscription(
+        env: &Env,
+        user: Address,
+        plan_id: u32,
+        subscription_id: u64,
+        plan: &SubscriptionPlan,
+        auto_renew: bool,
+    ) -> UserSubscription {
+        let current_time = env.ledger().timestamp();
+        let duration_seconds = (plan.duration_days as u64)
+            .checked_mul(SECONDS_PER_DAY)
+            .expect("Time overflow");
+        let end_date = current_time.checked_add(duration_seconds).expect("Time overflow");
+
+        UserSubscription {
+            subscription_id,
+            user,
+            plan_id,
+            status: SubscriptionStatus::Active,
+            start_date: current_time,
+            end_date,
+            last_payment_date: current_time,
+            auto_renew,
+            is_family_plan: false,
+            family_members: Vec::new(env),
+        }
     }
 }

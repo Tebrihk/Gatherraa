@@ -1,5 +1,5 @@
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
-use crate::{ZKTicketContract, ZKAttribute, AttributeType, CircuitParameters, BatchStatus};
+use crate::{ZKTicketContract, ZKAttribute, AttributeType, ZKTicketError, CircuitParameters, BatchStatus};
 
 #[test]
 fn test_initialize() {
@@ -578,4 +578,69 @@ fn test_proof_expiration() {
         );
     });
     assert!(result.is_err());
+}
+
+// ─── Direct unit tests for extracted helpers ────────────────────────────────────────
+
+fn make_attrs(env: &Env) -> Vec<ZKAttribute> {
+    let mut attrs = Vec::new(env);
+    attrs.push_back(ZKAttribute {
+        attribute_type: AttributeType::TicketId,
+        value: Vec::from_array(env, [1u8; 32]),
+        commitment: BytesN::from_array(env, &[1; 32]),
+        revealed: false,
+    });
+    attrs.push_back(ZKAttribute {
+        attribute_type: AttributeType::EventId,
+        value: Vec::from_array(env, [2u8; 32]),
+        commitment: BytesN::from_array(env, &[2; 32]),
+        revealed: false,
+    });
+    attrs
+}
+
+#[test]
+fn test_validate_attributes_passes_with_required() {
+    let env = Env::default();
+    let attrs = make_attrs(&env);
+    let result = ZKTicketContract::validate_attributes(&env, &attrs);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validate_attributes_fails_when_empty() {
+    let env = Env::default();
+    let attrs: Vec<ZKAttribute> = Vec::new(&env);
+    let result = ZKTicketContract::validate_attributes(&env, &attrs);
+    assert_eq!(result, Err(ZKTicketError::InsufficientAttributes));
+}
+
+#[test]
+fn test_validate_attributes_fails_missing_ticket_id() {
+    let env = Env::default();
+    let mut attrs = Vec::new(&env);
+    // Only EventId, missing TicketId
+    attrs.push_back(ZKAttribute {
+        attribute_type: AttributeType::EventId,
+        value: Vec::from_array(&env, [2u8; 32]),
+        commitment: BytesN::from_array(&env, &[2; 32]),
+        revealed: false,
+    });
+    let result = ZKTicketContract::validate_attributes(&env, &attrs);
+    assert_eq!(result, Err(ZKTicketError::InsufficientAttributes));
+}
+
+#[test]
+fn test_validate_attributes_fails_missing_event_id() {
+    let env = Env::default();
+    let mut attrs = Vec::new(&env);
+    // Only TicketId, missing EventId
+    attrs.push_back(ZKAttribute {
+        attribute_type: AttributeType::TicketId,
+        value: Vec::from_array(&env, [1u8; 32]),
+        commitment: BytesN::from_array(&env, &[1; 32]),
+        revealed: false,
+    });
+    let result = ZKTicketContract::validate_attributes(&env, &attrs);
+    assert_eq!(result, Err(ZKTicketError::InsufficientAttributes));
 }

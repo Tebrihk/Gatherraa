@@ -341,50 +341,61 @@ impl VRFContract {
 
     fn collect_entropy_sources(e: &Env) -> Vec<EntropySource> {
         let mut sources = Vec::new(e);
+        sources.push_back(Self::build_block_hash_entropy(e));
+        sources.push_back(Self::build_timestamp_entropy(e));
+        sources.push_back(Self::build_ledger_sequence_entropy(e));
+        sources.push_back(Self::build_network_entropy(e));
+        sources
+    }
 
-        // Block hash entropy
+    /// Builds an entropy source derived from the current ledger sequence (block hash proxy).
+    fn build_block_hash_entropy(e: &Env) -> EntropySource {
         let block_hash = e.crypto().sha256(&e.ledger().sequence().to_val().to_bytes());
-        sources.push_back(EntropySource {
+        EntropySource {
             source_type: SourceType::BlockHash,
             value: block_hash,
             weight: ENTROPY_WEIGHT_BLOCK_HASH,
             timestamp: e.ledger().timestamp(),
             reliability: 0.9,
-        });
+        }
+    }
 
-        // Timestamp entropy
+    /// Builds an entropy source derived from the current ledger timestamp.
+    fn build_timestamp_entropy(e: &Env) -> EntropySource {
         let timestamp_bytes = e.ledger().timestamp().to_be_bytes();
         let timestamp_hash = e.crypto().sha256(&timestamp_bytes.to_vec(e).to_bytes());
-        sources.push_back(EntropySource {
+        EntropySource {
             source_type: SourceType::Timestamp,
             value: timestamp_hash,
             weight: ENTROPY_WEIGHT_TIMESTAMP,
             timestamp: e.ledger().timestamp(),
             reliability: 0.8,
-        });
+        }
+    }
 
-        // Ledger sequence entropy
+    /// Builds an entropy source derived from the current ledger sequence number.
+    fn build_ledger_sequence_entropy(e: &Env) -> EntropySource {
         let sequence_bytes = e.ledger().sequence().to_be_bytes();
         let sequence_hash = e.crypto().sha256(&sequence_bytes.to_vec(e).to_bytes());
-        sources.push_back(EntropySource {
+        EntropySource {
             source_type: SourceType::LedgerSequence,
             value: sequence_hash,
             weight: ENTROPY_WEIGHT_LEDGER_SEQUENCE,
             timestamp: e.ledger().timestamp(),
             reliability: 0.9,
-        });
+        }
+    }
 
-        // Network entropy (simplified - in practice would use more sources)
+    /// Builds an entropy source derived from the contract's own address (network entropy proxy).
+    fn build_network_entropy(e: &Env) -> EntropySource {
         let network_entropy = e.crypto().sha256(&e.current_contract_address().to_val().to_bytes());
-        sources.push_back(EntropySource {
+        EntropySource {
             source_type: SourceType::NetworkEntropy,
             value: network_entropy,
             weight: ENTROPY_WEIGHT_LEDGER_SEQUENCE, // same weight as ledger sequence
             timestamp: e.ledger().timestamp(),
             reliability: 0.7,
-        });
-
-        sources
+        }
     }
 
     fn select_providers(e: &Env, max_providers: u32) -> Vec<Address> {
@@ -433,7 +444,7 @@ impl VRFContract {
         results
     }
 
-    fn monobit_test(randomness: &BytesN<32>) -> TestResult {
+    pub(crate) fn monobit_test(randomness: &BytesN<32>) -> TestResult {
         let mut ones = 0;
         for byte in randomness.as_bytes() {
             for bit in 0..8 {
@@ -460,7 +471,7 @@ impl VRFContract {
         }
     }
 
-    fn runs_test(randomness: &BytesN<32>) -> TestResult {
+    pub(crate) fn runs_test(randomness: &BytesN<32>) -> TestResult {
         let mut runs = 1;
         let mut prev_bit = randomness.as_bytes()[0] & 1;
 
@@ -490,7 +501,7 @@ impl VRFContract {
         }
     }
 
-    fn longest_run_test(randomness: &BytesN<32>) -> TestResult {
+    pub(crate) fn longest_run_test(randomness: &BytesN<32>) -> TestResult {
         let mut longest_run = 0;
         let mut current_run = 0;
         let mut prev_bit = 0;

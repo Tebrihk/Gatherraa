@@ -587,20 +587,8 @@ impl EscrowContract {
         let contract_address = env.current_contract_address();
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
 
-        let organizer_amount = Self::calculate_split(escrow.amount, escrow.revenue_splits.organizer_percentage, escrow.revenue_splits.precision);
-        let platform_amount = Self::calculate_split(escrow.amount, escrow.revenue_splits.platform_percentage, escrow.revenue_splits.precision);
-        let mut referral_amount = Self::calculate_split(escrow.amount, escrow.revenue_splits.referral_percentage, escrow.revenue_splits.precision);
-
-        // Adjust for rounding
-        let total_splits = organizer_amount
-            .checked_add(platform_amount)
-            .and_then(|val| val.checked_add(referral_amount))
-            .expect("Arithmetic overflow in total splits");
-
-        if total_splits > escrow.amount {
-            let diff = total_splits.checked_sub(escrow.amount).expect("Arithmetic error");
-            referral_amount = referral_amount.checked_sub(diff).expect("Arithmetic error");
-        }
+        let (organizer_amount, platform_amount, referral_amount) =
+            Self::compute_revenue_splits(escrow);
 
         // Transfer funds
         token_client.transfer(&contract_address, &escrow.organizer, &organizer_amount);
@@ -619,15 +607,8 @@ impl EscrowContract {
         let contract_address = env.current_contract_address();
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
 
-        let organizer_amount = Self::calculate_split(escrow.amount, escrow.revenue_splits.organizer_percentage, escrow.revenue_splits.precision);
-        let platform_amount = Self::calculate_split(escrow.amount, escrow.revenue_splits.platform_percentage, escrow.revenue_splits.precision);
-        let mut referral_amount = Self::calculate_split(escrow.amount, escrow.revenue_splits.referral_percentage, escrow.revenue_splits.precision);
-
-        // Adjust for rounding
-        let total_splits = organizer_amount + platform_amount + referral_amount;
-        if total_splits > escrow.amount {
-            referral_amount -= (total_splits - escrow.amount);
-        }
+        let (organizer_amount, platform_amount, referral_amount) =
+            Self::compute_revenue_splits(escrow);
 
         // Transfer funds with error handling
         if let Err(_) = token_client.try_transfer(&contract_address, &escrow.organizer, &organizer_amount) {
@@ -647,6 +628,40 @@ impl EscrowContract {
         }
 
         Ok(())
+    }
+
+    /// Computes the three-way revenue split (organizer, platform, referral) for a given escrow,
+    /// adjusting for rounding so that the total never exceeds `escrow.amount`.
+    /// Returns `(organizer_amount, platform_amount, referral_amount)`.
+    pub(crate) fn compute_revenue_splits(escrow: &Escrow) -> (i128, i128, i128) {
+        let organizer_amount = Self::calculate_split(
+            escrow.amount,
+            escrow.revenue_splits.organizer_percentage,
+            escrow.revenue_splits.precision,
+        );
+        let platform_amount = Self::calculate_split(
+            escrow.amount,
+            escrow.revenue_splits.platform_percentage,
+            escrow.revenue_splits.precision,
+        );
+        let mut referral_amount = Self::calculate_split(
+            escrow.amount,
+            escrow.revenue_splits.referral_percentage,
+            escrow.revenue_splits.precision,
+        );
+
+        // Adjust for rounding: never distribute more than the total amount
+        let total_splits = organizer_amount
+            .checked_add(platform_amount)
+            .and_then(|val| val.checked_add(referral_amount))
+            .expect("Arithmetic overflow in total splits");
+
+        if total_splits > escrow.amount {
+            let diff = total_splits.checked_sub(escrow.amount).expect("Arithmetic error");
+            referral_amount = referral_amount.checked_sub(diff).expect("Arithmetic error");
+        }
+
+        (organizer_amount, platform_amount, referral_amount)
     }
 
     fn track_referral(env: &Env, referrer: &Address, purchaser: &Address) {

@@ -593,3 +593,29 @@ fn test_overflow_protection() {
     // If we use i128::MAX and large decay/time, it will overflow.
     DutchAuctionContract::calculate_price(i128::MAX, 1, u32::MAX, u64::MAX);
 }
+
+// ─── Tests for extracted helpers ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_calculate_price_returns_initial_at_zero_elapsed() {
+    // At t=0, price should equal initial_price.
+    let price = DutchAuctionContract::calculate_price(1_000_000, 100_000, 1_000, 0);
+    assert_eq!(price, 1_000_000);
+}
+
+#[test]
+fn test_calculate_price_returns_floor_when_decay_saturates() {
+    // With large elapsed time the price should converge to floor_price.
+    let floor = 100_000_i128;
+    let price = DutchAuctionContract::calculate_price(1_000_000, floor, 1_000_000, 1_000_000);
+    assert_eq!(price, floor);
+}
+
+#[test]
+fn test_calculate_price_decreasing() {
+    // Price should be strictly decreasing over time (before saturating).
+    let p0 = DutchAuctionContract::calculate_price(1_000_000, 10_000, 100, 0);
+    let p1 = DutchAuctionContract::calculate_price(1_000_000, 10_000, 100, 100);
+    let p2 = DutchAuctionContract::calculate_price(1_000_000, 10_000, 100, 200);
+    assert!(p0 >= p1 && p1 >= p2, "Price must be non-increasing over time");
+}

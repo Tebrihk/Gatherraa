@@ -64,14 +64,14 @@ impl DutchAuctionContract {
         anti_bot_enabled: Option<bool>,
         min_bid_increment: Option<i128>,
     ) -> BytesN<32> {
-        if is_paused(&e) {
+        if is_paused(&env) {
             panic!("contract is paused");
         }
 
         organizer.require_auth();
 
         // Validate auction parameters
-        Self::validate_auction_params(&env, initial_price, reserve_price, floor_price, decay_constant, duration, total_tickets)?;
+        Self::validate_auction_params(&env, initial_price, reserve_price, floor_price, decay_constant, duration, total_tickets);
 
         // Check concurrent auction limit
         let config: AuctionConfig = env.storage().instance().get(&DataKey::AuctionConfig).unwrap();
@@ -117,7 +117,7 @@ impl DutchAuctionContract {
 
         // Add to organizer's auctions
         let organizer_key = DataKey::UserAuctions(organizer.clone());
-        let mut organizer_auctions: Vec<BytesN<32>> = env.storage().persistent().get(&organizer_key).unwrap_or(Vec::new(&e));
+        let mut organizer_auctions: Vec<BytesN<32>> = env.storage().persistent().get(&organizer_key).unwrap_or(Vec::new(&env));
         organizer_auctions.push_back(auction_id.clone());
         env.storage().persistent().set(&organizer_key, &organizer_auctions);
 
@@ -172,7 +172,7 @@ impl DutchAuctionContract {
         }
 
         // Check rate limiting
-        Self::check_rate_limit(&env, &bidder, &auction)?;
+        Self::check_rate_limit(&env, &bidder, &auction).unwrap_or_else(|e| panic!("{:?}", e));
 
         // Store commitment
         auction.winner_commitments.set(bidder.clone(), commitment.clone());
@@ -227,7 +227,7 @@ impl DutchAuctionContract {
         }
 
         // Process the revealed bid
-        Self::process_bid(&env, &mut auction, &bidder, amount)?;
+        Self::process_bid(&env, &mut auction, &bidder, amount).unwrap_or_else(|e| panic!("{:?}", e));
 
         // Update commit-reveal data
         commit_reveal.revealed = true;
@@ -258,10 +258,10 @@ impl DutchAuctionContract {
         }
 
         // Check rate limiting
-        Self::check_rate_limit(&env, &bidder, &auction)?;
+        Self::check_rate_limit(&env, &bidder, &auction).unwrap_or_else(|e| panic!("{:?}", e));
 
         // Process the bid
-        Self::process_bid(&env, &mut auction, &bidder, amount)?;
+        Self::process_bid(&env, &mut auction, &bidder, amount).unwrap_or_else(|e| panic!("{:?}", e));
 
         // Update rate limiter
         Self::update_rate_limiter(&env, &bidder);
@@ -419,40 +419,38 @@ impl DutchAuctionContract {
     }
 
     fn validate_auction_params(
-        e: &Env,
+        env: &Env,
         initial_price: i128,
         reserve_price: i128,
         floor_price: i128,
         decay_constant: u32,
         duration: u64,
         total_tickets: u32,
-    ) -> Result<(), DutchAuctionError> {
+    ) {
         if initial_price <= 0 || reserve_price <= 0 || floor_price <= 0 {
-            return Err(DutchAuctionError::InvalidAmount);
+            panic!("invalid price values");
         }
 
         if reserve_price >= initial_price {
-            return Err(DutchAuctionError::BelowReservePrice);
+            panic!("reserve price must be below initial price");
         }
 
         if floor_price >= reserve_price {
-            return Err(DutchAuctionError::BelowFloorPrice);
+            panic!("floor price must be below reserve price");
         }
 
         if decay_constant == 0 {
-            return Err(DutchAuctionError::InvalidDecayConstant);
+            panic!("decay constant must be positive");
         }
 
         let config: AuctionConfig = env.storage().instance().get(&DataKey::AuctionConfig).unwrap();
         if duration < config.min_duration || duration > config.max_duration {
-            return Err(DutchAuctionError::InvalidTime);
+            panic!("duration out of allowed range");
         }
 
         if total_tickets == 0 {
-            return Err(DutchAuctionError::NoTicketsAvailable);
+            panic!("total tickets must be positive");
         }
-
-        Ok(())
     }
 
     fn calculate_price(initial_price: i128, floor_price: i128, decay_constant: u32, time_elapsed: u64) -> i128 {
@@ -499,20 +497,9 @@ impl DutchAuctionContract {
 
         // Get current price
         let current_price = Self::get_current_price(env.clone(), auction.id.clone());
-        
-        // Check if bid meets minimum price
-        if amount < current_price {
-            return Err(DutchAuctionError::BidTooLow);
-        }
 
-        // Check minimum bid increment
-        if !auction.bids.is_empty() {
-            let highest_bid = auction.bids.iter().map(|b| b.amount).max().unwrap();
-            let min_increment_bid = highest_bid.checked_add(auction.min_bid_increment).expect("Arithmetic overflow");
-            if amount < min_increment_bid {
-                return Err(DutchAuctionError::BidTooLow);
-            }
-        }
+        // Validate amount against current price and minimum bid increment
+        Self::validate_bid_amount(auction, amount, current_price)?;
 
         // Transfer tokens to contract
         let token_client = soroban_sdk::token::Client::new(env, &auction.token);
@@ -539,10 +526,7 @@ impl DutchAuctionContract {
         auction.current_price = current_price;
 
         // Check for auction extension
-        let extension_point = end_time.checked_sub(auction.extension_threshold).expect("Time error");
-        if env.ledger().timestamp() > extension_point {
-            auction.final_extension_time = auction.final_extension_time.checked_add(auction.extension_duration).expect("Time overflow");
-        }
+        Self::apply_auction_extension(auction, end_time, env.ledger().timestamp());
 
         // Add to user's bids
         let user_bids_key = DataKey::UserBids(bidder.clone());
@@ -551,6 +535,34 @@ impl DutchAuctionContract {
         env.storage().persistent().set(&user_bids_key, &user_bids);
 
         Ok(())
+    }
+
+    /// Validates that `amount` meets both the current price floor and the minimum bid increment.
+    fn validate_bid_amount(auction: &Auction, amount: i128, current_price: i128) -> Result<(), DutchAuctionError> {
+        if amount < current_price {
+            return Err(DutchAuctionError::BidTooLow);
+        }
+
+        if !auction.bids.is_empty() {
+            let highest_bid = auction.bids.iter().map(|b| b.amount).max().unwrap();
+            let min_increment_bid = highest_bid.checked_add(auction.min_bid_increment).expect("Arithmetic overflow");
+            if amount < min_increment_bid {
+                return Err(DutchAuctionError::BidTooLow);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Extends the auction if the bid arrives within the anti-sniping threshold window.
+    fn apply_auction_extension(auction: &mut Auction, end_time: u64, current_time: u64) {
+        let extension_point = end_time.checked_sub(auction.extension_threshold).expect("Time error");
+        if current_time > extension_point {
+            auction.final_extension_time = auction
+                .final_extension_time
+                .checked_add(auction.extension_duration)
+                .expect("Time overflow");
+        }
     }
 
     fn check_rate_limit(env: &Env, bidder: &Address, auction: &Auction) -> Result<(), DutchAuctionError> {

@@ -180,32 +180,14 @@ impl ZKTicketContract {
             panic!("contract is paused");
         }
 
-        let commitment: TicketCommitment = env.storage().instance().get(&DataKey::TicketCommitment(ticket_commitment.clone()))
-            .unwrap_or_else(|| panic!("commitment not found"));
-
-        if !commitment.active {
-            panic!("commitment inactive");
-        }
-
-        if commitment.event_id != event_id {
-            panic!("event mismatch");
-        }
-
-        let nullifier_info: NullifierInfo = env.storage().instance().get(&DataKey::Nullifier(nullifier.clone()))
-            .unwrap_or_else(|| panic!("nullifier not found"));
-
-        if nullifier_info.used {
-            panic!("nullifier already used");
-        }
-
-        if env.ledger().timestamp() > expires_at {
-            panic!("proof expired");
-        }
-
-        let revocation_list: RevocationList = env.storage().instance().get(&DataKey::RevocationList).unwrap();
-        if revocation_list.revoked_commitments.contains(&ticket_commitment) {
-            panic!("ticket revoked");
-        }
+        // Validate all proof preconditions (commitment active, nullifier unused, not expired, not revoked)
+        let (commitment, _nullifier_info) = Self::validate_proof_state(
+            &env,
+            &ticket_commitment,
+            &nullifier,
+            &event_id,
+            expires_at,
+        )?;
 
         let verification_hash = Self::verify_zk_proof(&env, &proof_data, &attributes, &commitment)?;
         
@@ -227,7 +209,7 @@ impl ZKTicketContract {
 
         env.storage().instance().set(&DataKey::ZKProof(proof_id.clone()), &zk_proof);
 
-        let mut updated_nullifier = nullifier_info;
+        let mut updated_nullifier = _nullifier_info;
         updated_nullifier.used = true;
         updated_nullifier.used_at = Some(env.ledger().timestamp());
         updated_nullifier.proof_id = Some(proof_id.clone());
@@ -496,7 +478,53 @@ impl ZKTicketContract {
         // In a real implementation, you'd validate the circuit hashes against known good circuits
     }
 
-    fn validate_attributes(e: &Env, attributes: &Vec<ZKAttribute>) -> Result<(), ZKTicketError> {
+    /// Validates that a proof submission is allowed by checking commitment state, nullifier,
+    /// expiry, and revocation. Returns `(commitment, nullifier_info)` on success.
+    fn validate_proof_state(
+        env: &Env,
+        ticket_commitment: &BytesN<32>,
+        nullifier: &BytesN<32>,
+        event_id: &Address,
+        expires_at: u64,
+    ) -> Result<(TicketCommitment, NullifierInfo), ZKTicketError> {
+        let commitment: TicketCommitment = env
+            .storage()
+            .instance()
+            .get(&DataKey::TicketCommitment(ticket_commitment.clone()))
+            .unwrap_or_else(|| panic!("commitment not found"));
+
+        if !commitment.active {
+            panic!("commitment inactive");
+        }
+
+        if commitment.event_id != *event_id {
+            panic!("event mismatch");
+        }
+
+        let nullifier_info: NullifierInfo = env
+            .storage()
+            .instance()
+            .get(&DataKey::Nullifier(nullifier.clone()))
+            .unwrap_or_else(|| panic!("nullifier not found"));
+
+        if nullifier_info.used {
+            panic!("nullifier already used");
+        }
+
+        if env.ledger().timestamp() > expires_at {
+            panic!("proof expired");
+        }
+
+        let revocation_list: RevocationList =
+            env.storage().instance().get(&DataKey::RevocationList).unwrap();
+        if revocation_list.revoked_commitments.contains(ticket_commitment) {
+            panic!("ticket revoked");
+        }
+
+        Ok((commitment, nullifier_info))
+    }
+
+    pub(crate) fn validate_attributes(e: &Env, attributes: &Vec<ZKAttribute>) -> Result<(), ZKTicketError> {
         if attributes.is_empty() {
             return Err(ZKTicketError::InsufficientAttributes);
         }

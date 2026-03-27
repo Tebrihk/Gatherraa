@@ -665,43 +665,13 @@ impl SoulboundTicketContract {
             return tier.current_price;
         }
 
-        // Base price
-        let mut price = tier.base_price;
-
-        // Apply strategy variations
-        match tier.strategy {
-            PricingStrategy::Standard => {
-                // Demand based: base_price * (1 + (minted / (max_supply / 5)) * 5%)
-                let thresholds_passed = tier.minted / (tier.max_supply.max(1) / 5).max(1);
-                let multiplier = (thresholds_passed as i128).checked_mul(PRICE_INCREASE_BPS).expect("Arithmetic overflow");
-                let increase = price.checked_mul(multiplier).and_then(|v| v.checked_div(BPS_PRECISION)).expect("Arithmetic overflow");
-                price = price.checked_add(increase).expect("Arithmetic overflow");
-            }
-            PricingStrategy::TimeDecay => {
-                let event_info: EventInfo =
-                    e.storage().instance().get(&DataKey::EventInfo).unwrap();
-                let now = e.ledger().timestamp();
-                // If purchased way before event, apply 10% discount
-                // Assume linear scale from start to event_start_time
-                let start = event_info.start_time.saturating_sub(ONE_WEEK_SECONDS); // 1 week before
-                if now < start {
-                    let discount = price.checked_mul(EARLY_BIRD_DISCOUNT_BPS).and_then(|v| v.checked_div(BPS_PRECISION)).expect("Arithmetic overflow");
-                    price = price.checked_sub(discount).expect("Arithmetic overflow");
-                }
-            }
-            PricingStrategy::AbTestA => {
-                // High demand sensitivity (10% increase per threshold)
-                let thresholds_passed = tier.minted / (tier.max_supply.max(1) / 5).max(1);
-                let multiplier = (thresholds_passed as i128).checked_mul(PRICE_INCREASE_BPS * 2).expect("Arithmetic overflow");
-                let increase = price.checked_mul(multiplier).and_then(|v| v.checked_div(BPS_PRECISION)).expect("Arithmetic overflow");
-                price = price.checked_add(increase).expect("Arithmetic overflow");
-            }
-            PricingStrategy::AbTestB => {
-                // Floor starts higher (+20%)
-                let uplift = price.checked_mul(AB_TEST_B_FLOOR_UPLIFT_BPS).and_then(|v| v.checked_div(BPS_PRECISION)).expect("Arithmetic overflow");
-                price = price.checked_add(uplift).expect("Arithmetic overflow");
-            }
-        }
+        // Apply strategy-specific price adjustment
+        let mut price = match tier.strategy {
+            PricingStrategy::Standard => Self::apply_standard_pricing(tier.base_price, &tier),
+            PricingStrategy::TimeDecay => Self::apply_time_decay_pricing(e, tier.base_price, &tier),
+            PricingStrategy::AbTestA => Self::apply_ab_test_a_pricing(tier.base_price, &tier),
+            PricingStrategy::AbTestB => Self::apply_ab_test_b_pricing(tier.base_price),
+        };
 
         // Apply external Oracle factors using the real DIA oracle integration
         let oracle_multiplier = Self::fetch_oracle_multiplier(e, &config);
@@ -712,6 +682,57 @@ impl SoulboundTicketContract {
 
         // We only return the price here. It is updated during `purchase`.
         price
+    }
+
+    /// Demand-based standard pricing: price increases by `PRICE_INCREASE_BPS` per threshold passed.
+    fn apply_standard_pricing(base_price: i128, tier: &Tier) -> i128 {
+        let thresholds_passed = tier.minted / (tier.max_supply.max(1) / 5).max(1);
+        let multiplier = (thresholds_passed as i128)
+            .checked_mul(PRICE_INCREASE_BPS)
+            .expect("Arithmetic overflow");
+        let increase = base_price
+            .checked_mul(multiplier)
+            .and_then(|v| v.checked_div(BPS_PRECISION))
+            .expect("Arithmetic overflow");
+        base_price.checked_add(increase).expect("Arithmetic overflow")
+    }
+
+    /// Time-decay pricing: applies an early-bird discount if purchased before the event week.
+    fn apply_time_decay_pricing(e: &Env, base_price: i128, _tier: &Tier) -> i128 {
+        let event_info: EventInfo = e.storage().instance().get(&DataKey::EventInfo).unwrap();
+        let now = e.ledger().timestamp();
+        let start = event_info.start_time.saturating_sub(ONE_WEEK_SECONDS);
+        if now < start {
+            let discount = base_price
+                .checked_mul(EARLY_BIRD_DISCOUNT_BPS)
+                .and_then(|v| v.checked_div(BPS_PRECISION))
+                .expect("Arithmetic overflow");
+            base_price.checked_sub(discount).expect("Arithmetic overflow")
+        } else {
+            base_price
+        }
+    }
+
+    /// A/B test variant A: double demand sensitivity (10% increase per threshold).
+    fn apply_ab_test_a_pricing(base_price: i128, tier: &Tier) -> i128 {
+        let thresholds_passed = tier.minted / (tier.max_supply.max(1) / 5).max(1);
+        let multiplier = (thresholds_passed as i128)
+            .checked_mul(PRICE_INCREASE_BPS * 2)
+            .expect("Arithmetic overflow");
+        let increase = base_price
+            .checked_mul(multiplier)
+            .and_then(|v| v.checked_div(BPS_PRECISION))
+            .expect("Arithmetic overflow");
+        base_price.checked_add(increase).expect("Arithmetic overflow")
+    }
+
+    /// A/B test variant B: floor starts 20% higher than base price.
+    fn apply_ab_test_b_pricing(base_price: i128) -> i128 {
+        let uplift = base_price
+            .checked_mul(AB_TEST_B_FLOOR_UPLIFT_BPS)
+            .and_then(|v| v.checked_div(BPS_PRECISION))
+            .expect("Arithmetic overflow");
+        base_price.checked_add(uplift).expect("Arithmetic overflow")
     }
 
     // Batch Minting for Organizer
@@ -733,29 +754,8 @@ impl SoulboundTicketContract {
         }
 
         for _ in 0..amount {
-            // custom sequential increment
-            let mut counter: u32 = e
-                .storage()
-                .instance()
-                .get(&DataKey::TokenIdCounter)
-                .unwrap();
-            counter = counter.checked_add(1).expect("Counter overflow");
-            let token_id = counter;
-            e.storage()
-                .instance()
-                .set(&DataKey::TokenIdCounter, &counter);
-
-            Base::sequential_mint(e, &to);
-
-            let ticket = Ticket {
-                tier_symbol: tier_symbol.clone(),
-                purchase_time: e.ledger().timestamp(),
-                price_paid: 0, // Admin mints are free
-                is_valid: true,
-            };
-            e.storage()
-                .persistent()
-                .set(&DataKey::Ticket(token_id), &ticket);
+            let token_id = Self::mint_next_token(e, &to, &tier_symbol, 0);
+            let _ = token_id; // suppress unused warning; counter already updated
         }
 
         tier.minted = tier.minted.checked_add(amount).expect("Supply overflow");
@@ -793,29 +793,8 @@ impl SoulboundTicketContract {
         let token_client = token::Client::new(e, &payment_token);
         token_client.transfer(&buyer, &admin, &price);
 
-        // Mint Token
-        let mut counter: u32 = e
-            .storage()
-            .instance()
-            .get(&DataKey::TokenIdCounter)
-            .unwrap();
-        counter = counter.checked_add(1).expect("Counter overflow");
-        let token_id = counter;
-        e.storage()
-            .instance()
-            .set(&DataKey::TokenIdCounter, &counter);
-
-        Base::sequential_mint(e, &buyer);
-
-        let ticket = Ticket {
-            tier_symbol: tier_symbol.clone(),
-            purchase_time: e.ledger().timestamp(),
-            price_paid: price,
-            is_valid: true,
-        };
-        e.storage()
-            .persistent()
-            .set(&DataKey::Ticket(token_id), &ticket);
+        // Mint token and store ticket metadata
+        let token_id = Self::mint_next_token(e, &buyer, &tier_symbol, price);
 
         tier.minted = tier.minted.checked_add(1).expect("Supply overflow");
         tier.current_price = price; // Update the current recorded price for this tier
@@ -832,6 +811,31 @@ impl SoulboundTicketContract {
             (Symbol::new(&e, "ticket_purchased"), buyer),
             (tier_symbol, token_id, price),
         );
+    }
+
+    /// Increments the token ID counter, calls `Base::sequential_mint`, stores the ticket, and
+    /// returns the new token ID. `price_paid` should be 0 for admin/batch mints.
+    fn mint_next_token(e: &Env, to: &Address, tier_symbol: &Symbol, price_paid: i128) -> u32 {
+        let mut counter: u32 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TokenIdCounter)
+            .unwrap();
+        counter = counter.checked_add(1).expect("Counter overflow");
+        let token_id = counter;
+        e.storage().instance().set(&DataKey::TokenIdCounter, &counter);
+
+        Base::sequential_mint(e, to);
+
+        let ticket = Ticket {
+            tier_symbol: tier_symbol.clone(),
+            purchase_time: e.ledger().timestamp(),
+            price_paid,
+            is_valid: true,
+        };
+        e.storage().persistent().set(&DataKey::Ticket(token_id), &ticket);
+
+        token_id
     }
 
     // Refund a ticket
